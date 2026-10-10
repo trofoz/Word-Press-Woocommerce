@@ -16,9 +16,9 @@
 
 ## Автоматизований WooCommerce runtime
 
-Workflow `.github/workflows/woo-integration.yml` створює окрему MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, шлюзи, три профілі продавців, маршрутизацію товарів, callback, IBAN надходження, міграцію історичного замовлення й оновлення схеми.
+Workflow `.github/workflows/woo-integration.yml` створює окрему MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію форку й оригінального WayForPay-плагіна (upstream commit `b33c8bcb725cf02f8a546273596071024fa4a7ba`), створення таблиць, шлюзи, три профілі продавців, маршрутизацію товарів, callback, IBAN надходження, міграцію історичного замовлення й оновлення схеми.
 
-Останній результат: **PASS, 4/4 jobs**, [Actions run 38081880219](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38081880219), commit `96343a7`. У кожній комбінації пройшли: runtime бази та seller routing; явна міграція неоплаченого старого замовлення, відмови для повторного/закритого/оплаченого/іншого gateway; переходи власника callback route та видимості gateway; підписаний callback fixture з дублем і розбіжностями; IBAN accepted/duplicate/conflict; прострочене посилання; перехід схеми v3→v4 зі збереженням purchase, receipts, events і WooCommerce order. Callback підписував тестовий harness; hosted payment form і реальне списання цей workflow не запускав.
+Останній результат: **PASS, 4/4 jobs**, [Actions run 38083657469](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38083657469), commit `b22b264`. Runtime harness викликав класичний add-to-cart filter і Store API validation action: обидва відхилили інший seller; той самий продавець може мати кілька позицій; змішаний кошик блокується на checkout. У змодельованому `order-pay` query context gateway й юридична назва лишилися з конфігурації моменту покупки після зміни активної конфігурації. Оригінальний gateway завантажується поруч, форк має пріоритет callback, а реальний POST до старого callback route завершується HTTP 400 без передачі маршруту оригінальному gateway. Також пройшли runtime бази та seller routing; явна міграція неоплаченого старого замовлення й відмови для непридатних замовлень; підписаний callback fixture з дублем і розбіжностями; IBAN accepted/duplicate/conflict; прострочене посилання; перехід схеми v3→v4 зі збереженням purchase, receipts, events і WooCommerce order. Callback підписував тестовий harness; браузерний checkout, hosted payment form і реальне списання цей workflow не запускав. Sandbox job у цьому запуску був skipped.
 
 ## Окремий WayForPay sandbox запуск
 
@@ -53,7 +53,7 @@ Workflow має ручний параметр `run_wayforpay_sandbox`. Для о
 - З upstream-плагіном перевірити початкову та передану callback-маршрутизацію, міграцію відкритого замовлення, відхилення неправильного/оплаченого/закритого замовлення й операційне прийняття тільки точного legacy receipt.
 - Перевірити повторну активацію upstream і форку, щоб callback залишався в одного визначеного власника й шлюзи не дублювалися.
 
-Безплатіжні частини частково автоматизовані в run `38081880219`: v3→v4 `dbDelta` upgrade збереження даних, явне призначення старого неоплаченого замовлення й відмови для непридатних замовлень, перемикання callback owner/gateway. Це не перевіряє повторну активацію разом зі справжнім upstream-плагіном, адмінський UI та всі стани order-pay.
+Безплатіжні сценарії для змішаного кошика, `order-pay`, міграції та співіснування оригінального gateway пройшли в runtime матриці `38083657469`. Перевірка callback route виконується POST-запитом до локального WordPress у CI. Це не покриває повторну активацію плагінів у різному порядку, фактичний браузерний checkout, адмінський UI й усі стани `order-pay`.
 
 ## Відкриті release gates
 
