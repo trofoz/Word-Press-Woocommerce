@@ -1,0 +1,83 @@
+name: WooCommerce integration
+
+on:
+  push:
+    branches:
+      - 'test/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: PHP 8.3 / WC 11.1 / ${{ matrix.checkout }} / HPOS ${{ matrix.hpos }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        checkout: [classic, blocks]
+        hpos: ['0', '1']
+
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: wordpress_test
+          MARIADB_USER: wordpress
+          MARIADB_PASSWORD: wordpress-test-only
+          MARIADB_ROOT_PASSWORD: root-test-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, dom, exif, fileinfo, gd, intl, mbstring, mysqli, zip
+          coverage: none
+
+      - name: Install WP-CLI
+        run: composer global require --no-interaction wp-cli/wp-cli-bundle:2.12.0
+
+      - name: Install WordPress and WooCommerce into disposable database
+        env:
+          WP_PATH: ${{ runner.temp }}/wfpms-wp
+          WP_CLI_ALLOW_ROOT: '1'
+        run: |
+          set -euo pipefail
+          export PATH="$(composer global config bin-dir --absolute):$PATH"
+          mkdir -p "$WP_PATH"
+          wp core download --path="$WP_PATH" --version=6.8.2
+          wp config create --path="$WP_PATH" \
+            --dbname=wordpress_test --dbuser=wordpress --dbpass=wordpress-test-only \
+            --dbhost=127.0.0.1 --dbprefix=wptest_ --skip-check
+          wp core install --path="$WP_PATH" --url=http://127.0.0.1:8099 \
+            --title='Disposable WayForPay integration test' \
+            --admin_user=test-admin --admin_password=test-only-admin-password \
+            --admin_email=admin@example.test --skip-email
+          wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
+          ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
+          wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
+          wp option update woocommerce_custom_orders_table_enabled '${{ matrix.hpos }}' --path="$WP_PATH"
+          if [[ '${{ matrix.checkout }}' == blocks ]]; then
+            wp post create --path="$WP_PATH" --post_type=page --post_title=Checkout \
+              --post_name=checkout --post_status=publish \
+              --post_content='<!-- wp:woocommerce/checkout /-->' --porcelain > "$RUNNER_TEMP/checkout-page-id"
+          else
+            wp post create --path="$WP_PATH" --post_type=page --post_title=Checkout \
+              --post_name=checkout --post_status=publish \
+              --post_content='[woocommerce_checkout]' --porcelain > "$RUNNER_TEMP/checkout-page-id"
+          fi
+          wp option update woocommerce_checkout_page_id "$(cat "$RUNNER_TEMP/checkout-page-id")" --path="$WP_PATH"
+          WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+

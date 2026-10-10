@@ -33,8 +33,9 @@
 
 ## Git та походження
 
-База: `b33c8bcb725cf02f8a546273596071024fa4a7ba`. Робоча гілка: `feature/stage-3-seller-management`.
-Remote `upstream` для читання, push URL вимкнений. GitHub-форк користувача ще не створений; `origin` відсутній.
+База: `b33c8bcb725cf02f8a546273596071024fa4a7ba`. GitHub-форк: `trofoz/Word-Press-Woocommerce`.
+`origin` вказує на форк, `upstream` — на `wayforpay/Word-Press-Woocommerce` і доступний лише для читання.
+Інтеграційна гілка: `test/stages-1-8-integration`. Workflow `.github/workflows/woo-integration.yml` запускає ізольовані WordPress/WooCommerce/ MariaDB перевірки для Classic і Blocks з HPOS та без нього.
 Каталог має власний `.git`, не є submodule. Не додавати його до батьківського Git як випадковий gitlink; публікувати окремо.
 
 Автор оригіналу: WayForPay, `support@wayforpay.com`. Атрибуція та GNU GPL v3 з вихідного заголовка збережені; див. [LICENSE](LICENSE) і [первинний README](docs/sources/upstream-README.md). Це похідний проєкт, а не заява про офіційну підтримку WayForPay.
