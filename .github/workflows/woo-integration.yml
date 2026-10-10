@@ -75,7 +75,7 @@ jobs:
           wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
           ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
           wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
-          UPSTREAM_PATH="$RUNNER_TEMP/wayforpay-upstream"
+          UPSTREAM_PATH="$WP_PATH/../wayforpay-upstream"
           git init "$UPSTREAM_PATH"
           git -C "$UPSTREAM_PATH" remote add origin https://github.com/wayforpay/Word-Press-Woocommerce.git
           git -C "$UPSTREAM_PATH" fetch --depth=1 origin b33c8bcb725cf02f8a546273596071024fa4a7ba
