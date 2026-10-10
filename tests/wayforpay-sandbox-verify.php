@@ -1,3 +1,4 @@
+No syntax errors detected in tests/wayforpay-sandbox-verify.php
 <?php
 
 use WfpMultiSeller\PurchaseExecutionService;
@@ -39,6 +40,9 @@ $statusRequest = [
 $statusRequest['merchantSignature'] = hash_hmac('md5', $merchantAccount . ';' . $orderReference, $secret);
 $providerStatus = null;
 $providerReasonCode = '';
+$providerReason = '';
+$lastStatusHttpCode = 0;
+$lastStatusKeys = [];
 $statusDeadline = time() + 120;
 do {
     $statusResponse = wp_remote_post('https://api.wayforpay.com/api', [
@@ -46,8 +50,16 @@ do {
         'headers' => ['Content-Type' => 'application/json'],
         'body' => wp_json_encode($statusRequest),
     ]);
+    if (!is_wp_error($statusResponse)) {
+        $lastStatusHttpCode = wp_remote_retrieve_response_code($statusResponse);
+    }
     if (!is_wp_error($statusResponse) && wp_remote_retrieve_response_code($statusResponse) === 200) {
         $statusData = json_decode((string) wp_remote_retrieve_body($statusResponse), true);
+        if (is_array($statusData)) {
+            $lastStatusKeys = array_values(array_filter(array_keys($statusData), 'is_string'));
+            $providerReasonCode = (string) ($statusData['reasonCode'] ?? '');
+            $providerReason = (string) ($statusData['reason'] ?? '');
+        }
         if (is_array($statusData) && isset($statusData['transactionStatus'])) {
             wfpms_sandbox_verify_assert(
                 hash_equals($merchantAccount, (string) ($statusData['merchantAccount'] ?? ''))
@@ -63,7 +75,6 @@ do {
                 'WayForPay status response signature is invalid.'
             );
             $providerStatus = (string) $statusData['transactionStatus'];
-            $providerReasonCode = (string) ($statusData['reasonCode'] ?? '');
             if (in_array($providerStatus, ['Approved', 'Declined', 'Expired', 'Refunded', 'Voided'], true)) {
                 break;
             }
@@ -72,6 +83,13 @@ do {
     usleep(5_000_000);
 } while (time() < $statusDeadline);
 
+if ($providerStatus === null) {
+    $safeReason = preg_replace('/https?:\/\/\S+|\d{6,}/i', '<redacted>', $providerReason);
+    echo 'SAFE_STATUS_DIAGNOSTIC http=' . $lastStatusHttpCode
+        . ' reasonCode=' . preg_replace('/[^0-9]/', '', $providerReasonCode)
+        . ' reason=' . substr((string) $safeReason, 0, 120)
+        . ' responseKeys=' . implode(',', $lastStatusKeys) . "\n";
+}
 if ($providerStatus === 'Declined') {
     $purchase = PurchaseRepository::for_order($orderId);
     $order = wc_get_order($orderId);
