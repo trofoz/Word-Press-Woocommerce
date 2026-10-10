@@ -120,6 +120,7 @@ $product->set_name('Integration product');
 $product->set_status('publish');
 $product->set_regular_price('10.00');
 $product->save();
+update_option('wfpms_integration_iban_product_id', $product->get_id(), false);
 wp_set_object_terms($product->get_id(), [$categories[0]], 'product_cat');
 $resolved = ProductRouting::resolve($product->get_id());
 wfpms_integration_assert($resolved['ok'] && $resolved['seller_id'] === $sellerIds[0] && $resolved['source'] === 'category', 'product routes to seller by category');
