@@ -2,6 +2,7 @@ No syntax errors detected in tests/wayforpay-sandbox-seed.php
 <?php
 
 use WfpMultiSeller\ProductRouting;
+use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
 use WfpMultiSeller\WayForPayGateway;
