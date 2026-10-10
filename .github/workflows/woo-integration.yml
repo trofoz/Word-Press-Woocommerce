@@ -103,6 +103,7 @@ jobs:
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-bank-receipt.php" --path="$WP_PATH"
           done
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-schema-upgrade.php" --path="$WP_PATH"
 
   wayforpay-sandbox:
     name: WayForPay sandbox hosted-payment status
