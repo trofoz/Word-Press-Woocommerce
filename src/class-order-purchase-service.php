@@ -10,15 +10,14 @@ final class OrderPurchaseService
     {
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
+        add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
+        add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
         add_filter('woocommerce_available_payment_gateways', [self::class, 'filter_cart_gateways'], 100);
     }
 
     public static function finalize_checkout_order($order): void
     {
-        if ($order instanceof \WC_Order && preg_match(
-            '/\A0+(?:\.0+)?\z/',
-            wc_format_decimal($order->get_total(), wc_get_price_decimals(), false)
-        ) !== 1) {
+        if ($order instanceof \WC_Order) {
             self::finalize((int) $order->get_id());
         }
     }
@@ -34,15 +33,59 @@ final class OrderPurchaseService
                 __('У кошику мають бути товари одного налаштованого продавця. Перевірте призначення товарів або розділіть покупки.', 'wayforpay-multi-seller'),
                 'error'
             );
+            return;
         }
+        if (self::cart_is_zero_total() && !PaymentOperations::zero_total_enabled()) {
+            wc_add_notice(
+                __('Безоплатні замовлення вимкнені адміністратором магазину.', 'wayforpay-multi-seller'),
+                'error'
+            );
+        }
+    }
+
+    public static function validate_add_to_cart(bool $passed, int $productId, int $quantity, int $variationId = 0, array $variation = [], array $cartItemData = []): bool
+    {
+        if (!$passed || !function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+            return $passed;
+        }
+        $candidateId = $variationId > 0 ? $variationId : $productId;
+        $candidate = ProductRouting::resolve($candidateId);
+        if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
+            wc_add_notice(__('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller'), 'error');
+            return false;
+        }
+        foreach (WC()->cart->get_cart() as $item) {
+            $itemId = (int) ($item['variation_id'] ?? $item['product_id'] ?? 0);
+            $existing = ProductRouting::resolve($itemId);
+            if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
+                wc_add_notice(
+                    __('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller'),
+                    'error'
+                );
+                return false;
+            }
+        }
+        return true;
     }
 
     public static function filter_cart_gateways(array $gateways): array
     {
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));
-            if ($orderId > 0 && PurchaseRepository::for_order($orderId) !== null) {
-                return isset($gateways['wfpms_card']) ? ['wfpms_card' => $gateways['wfpms_card']] : [];
+            $purchase = $orderId > 0 ? PurchaseRepository::for_order($orderId) : null;
+            if ($purchase !== null) {
+                $config = SellerRepository::config((int) $purchase['config_id']);
+                if ($config === null) {
+                    return [];
+                }
+                $allowed = [];
+                if ((int) $config['card_enabled'] === 1 && isset($gateways['wfpms_card'])) {
+                    $allowed['wfpms_card'] = $gateways['wfpms_card'];
+                }
+                if ((int) $config['iban_enabled'] === 1 && isset($gateways['wfpms_iban'])) {
+                    $allowed['wfpms_iban'] = $gateways['wfpms_iban'];
+                }
+                return $allowed;
             }
             return $gateways;
         }
@@ -50,16 +93,26 @@ final class OrderPurchaseService
         if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
             return $gateways;
         }
+        if (self::cart_is_zero_total()) {
+            return [];
+        }
         $resolution = self::seller_for_cart();
         if (!$resolution['ok']) {
             return [];
         }
         $config = SellerRepository::current_config((int) $resolution['seller_id']);
-        if ($config === null || (int) $config['card_enabled'] !== 1
-            || SecretStore::decrypt((string) $config['secret_ciphertext']) === null) {
+        if ($config === null) {
             return [];
         }
-        return isset($gateways['wfpms_card']) ? ['wfpms_card' => $gateways['wfpms_card']] : [];
+        $allowed = [];
+        if ((int) $config['card_enabled'] === 1 && SecretStore::decrypt((string) $config['secret_ciphertext']) !== null
+            && isset($gateways['wfpms_card'])) {
+            $allowed['wfpms_card'] = $gateways['wfpms_card'];
+        }
+        if ((int) $config['iban_enabled'] === 1 && isset($gateways['wfpms_iban'])) {
+            $allowed['wfpms_iban'] = $gateways['wfpms_iban'];
+        }
+        return $allowed;
     }
 
     /** @return array{ok:bool,seller_id:?int} */
@@ -117,7 +170,22 @@ final class OrderPurchaseService
             $saved = $existing === null ? null : json_decode((string) $existing['financial_snapshot'], true);
             $scale = is_array($saved) ? (int) ($saved['amount_scale'] ?? wc_get_price_decimals()) : wc_get_price_decimals();
             $snapshot = self::snapshot($order, $seller, $config, $scale);
+            $isZero = self::is_zero_amount((string) $snapshot['amount']);
+            if ($isZero && !PaymentOperations::zero_total_enabled()) {
+                throw new \RuntimeException('Zero-total purchases are disabled by store policy.');
+            }
             $purchase = PurchaseRepository::finalize($orderId, $sellerId, (int) $config['id'], $snapshot);
+            if ($isZero) {
+                $basis = wp_json_encode([
+                    'coupon_codes' => $snapshot['coupons'],
+                    'discount_total' => $snapshot['discount_total'],
+                    'zero_price_items' => array_values(array_map(static fn(array $item): string => (string) $item['name'], $snapshot['items'])),
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                if (!is_string($basis) || !PurchaseRepository::mark_free((int) $purchase['id'], $basis)) {
+                    throw new \RuntimeException('Could not persist the zero-total purchase basis.');
+                }
+                $purchase = PurchaseRepository::for_order($orderId) ?? $purchase;
+            }
             $order->update_meta_data('_wfpms_purchase_id', (string) $purchase['id']);
             $order->update_meta_data('_wfpms_seller_id', (string) $sellerId);
             $order->update_meta_data('_wfpms_config_id', (string) $config['id']);
@@ -132,6 +200,9 @@ final class OrderPurchaseService
                 'config_id' => (int) $config['id'],
             ]);
             $order->save();
+            if ($isZero && $order->is_paid()) {
+                PurchaseExecutionService::observe_woo_payment_complete($orderId);
+            }
             return $purchase;
         } finally {
             PurchaseRepository::release_order_lock($orderId);
@@ -226,6 +297,7 @@ final class OrderPurchaseService
             'tax_id' => (string) $config['tax_id'],
             'iban' => (string) $config['iban'],
             'bank_name' => (string) $config['bank_name'],
+            'purpose_template' => (string) $config['purpose_template'],
             'merchant_account' => (string) $config['merchant_account'],
             'merchant_domain' => (string) $config['merchant_domain'],
             'config_id' => (int) $config['id'],
@@ -258,5 +330,23 @@ final class OrderPurchaseService
                 ];
             }, $order->get_items('tax')),
         ];
+    }
+
+    public static function cart_is_zero_total_for_gateway(): bool
+    {
+        return self::cart_is_zero_total();
+    }
+
+    private static function cart_is_zero_total(): bool
+    {
+        if (!function_exists('WC') || !WC()->cart) {
+            return false;
+        }
+        return self::is_zero_amount(wc_format_decimal(WC()->cart->get_total('edit'), wc_get_price_decimals(), false));
+    }
+
+    private static function is_zero_amount(string $amount): bool
+    {
+        return preg_match('/\A0+(?:\.0+)?\z/', $amount) === 1;
     }
 }

@@ -1,14 +1,15 @@
 # WayForPay Multi-Seller for WooCommerce
 
 Локальний форк `wayforpay/Word-Press-Woocommerce` зі збереженою історією upstream.
-Етапи 1–3: аудит, фінансова модель, seller-профілі та маршрутизація товарів, 10.10.2026.
+Етапи 1–7: аудит, seller-модель, профілі, purchase/payment core, IBAN operations і Checkout Blocks, 10.10.2026.
 
-**Це рання розробка, не готовий до живих платежів плагін.** Уже є новий entrypoint, таблиці продавців і реквізитів, шифрування WayForPay secret, налаштування категорій і ручне призначення товарів. Шлюзи оплати, кошик, callbacks, замовлення та міграція ще не реалізовані.
+**Це рання розробка, не готовий до живих платежів плагін.** Реалізовані seller routing, purchase snapshots, картковий/IBAN gateway та базовий Checkout Blocks adapter. Інтеграційне приймання у WordPress/WooCommerce і WayForPay sandbox, міграція історичних замовлень та повна перевірка критеріїв PRD ще не виконані.
 
 ## Документи
 
 - [Результати етапів 1–2](docs/stages-1-2.md).
 - [Реалізація етапу 3](docs/stage-3.md).
+- [Реалізація етапів 6–7 і відкриті межі](docs/stages-6-7.md).
 - [Аудит і карта використання коду](docs/audit-and-reuse.md).
 - [Фінансова модель та конкурентні операції](docs/financial-model.md).
 - [Переходи станів](docs/state-transitions.md).
@@ -27,7 +28,7 @@
 | Новий callback | `wc-api=wfpms_callback` |
 | Історичний callback | `wc-api=WC_wayforpay`, лише підтверджено мігровані замовлення |
 
-Ідентифікатори зарезервовані контрактом; payment gateways ще не зареєстровані. Версія нового плагіна починається з `0.1.0-dev`; upstream `1.0` не є її версією.
+Версія нового плагіна починається з `0.1.0-dev`; upstream `1.0` не є її версією.
 
 ## Git та походження
 

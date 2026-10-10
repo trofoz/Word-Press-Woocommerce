@@ -39,4 +39,4 @@
 
 Модель зіставлена з FR01–17 і критеріями PRD. Перевірені походження clone та незмінність PHP upstream. Схеми не є результатом виконання SQL. Тести, платіжні запити, production-операції та CI не запускалися.
 
-Реалізацію purchase storage та карткового шлюзу етапів 4–5 описано у [stages-4-5.md](stages-4-5.md). Вона не є sandbox чи production прийманням; P01–P03 залишаються release limits.
+Реалізацію purchase storage та карткового шлюзу етапів 4–5 описано у [stages-4-5.md](stages-4-5.md), а IBAN/операції/Blocks — у [stages-6-7.md](stages-6-7.md). Локальна реалізація не є sandbox чи production прийманням; P01–P03 і сумісність лишаються release limits.

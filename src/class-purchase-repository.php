@@ -34,6 +34,65 @@ final class PurchaseRepository
         return is_array($row) ? $row : null;
     }
 
+    /** @return list<array<string,mixed>> */
+    public static function attempts_for_purchase(int $purchaseId): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT * FROM ' . self::attempts_table() . ' WHERE purchase_id=%d ORDER BY id DESC',
+            $purchaseId
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    public static function active_attempt_channel(int $purchaseId): ?string
+    {
+        global $wpdb;
+        $channel = $wpdb->get_var($wpdb->prepare(
+            'SELECT channel FROM ' . self::attempts_table() . ' WHERE purchase_id=%d AND status=%s ORDER BY id DESC LIMIT 1',
+            $purchaseId,
+            'issued'
+        ));
+        return is_string($channel) && $channel !== '' ? $channel : null;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public static function receipts_for_purchase(int $purchaseId): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT * FROM ' . self::receipts_table() . ' WHERE purchase_id=%d ORDER BY id DESC',
+            $purchaseId
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    /** @return list<array<string,mixed>> */
+    public static function review_queue(int $limit = 100): array
+    {
+        global $wpdb;
+        $limit = max(1, min(500, $limit));
+        $sql = 'SELECT p.*,s.internal_label FROM ' . self::purchases_table() . ' p '
+            . 'LEFT JOIN ' . SellerRepository::sellers_table() . ' s ON s.id=p.seller_id '
+            . "WHERE p.state IN ('review','paid_review') OR p.execution_state='review' "
+            . 'ORDER BY p.updated_at ASC LIMIT ' . $limit;
+        $rows = $wpdb->get_results($sql, ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    public static function mark_free(int $purchaseId, string $basis): bool
+    {
+        global $wpdb;
+        return $wpdb->update(self::purchases_table(), [
+            'state' => 'free',
+            'locked_at' => current_time('mysql', true),
+            'free_basis' => $basis,
+            'execution_state' => 'pending',
+            'execution_updated_at' => current_time('mysql', true),
+            'updated_at' => current_time('mysql', true),
+        ], ['id' => $purchaseId, 'state' => 'ready']) !== false;
+    }
+
     public static function order_lock(int $orderId): bool
     {
         global $wpdb;

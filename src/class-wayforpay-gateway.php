@@ -32,6 +32,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
     public static function register(array $gateways): array
     {
         $gateways[] = self::class;
+        $gateways[] = BankTransferGateway::class;
         return $gateways;
     }
 
@@ -48,6 +49,10 @@ final class WayForPayGateway extends \WC_Payment_Gateway
             if (!$order instanceof \WC_Order || $purchase === null
                 || !in_array($order->get_status(), ['pending', 'on-hold'], true)
                 || !in_array((string) $purchase['state'], ['ready', 'awaiting_payment'], true)) {
+                return false;
+            }
+            $activeChannel = PurchaseRepository::active_attempt_channel((int) $purchase['id']);
+            if ($activeChannel !== null && $activeChannel !== 'card') {
                 return false;
             }
             $config = SellerRepository::config((int) $purchase['config_id']);
@@ -126,8 +131,16 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                 if (preg_match('/\A0+(?:\.0+)?\z/', (string) $purchase['amount']) === 1) {
                     throw new \RuntimeException('Zero-total purchases do not use WayForPay.');
                 }
-                if (in_array((string) $purchase['state'], ['paid', 'review', 'paid_review'], true)) {
+                if (in_array((string) $purchase['state'], ['paid', 'review', 'paid_review', 'expired'], true)) {
                     throw new \RuntimeException('This purchase already has a confirmed payment or requires review.');
+                }
+                $now = current_time('mysql', true);
+                $expiresAt = (string) ($purchase['expires_at'] ?? '');
+                if ($expiresAt !== '' && $expiresAt <= $now) {
+                    throw new \RuntimeException('The payment deadline has passed. Contact the store to resolve this order.');
+                }
+                if ($expiresAt === '') {
+                    $expiresAt = gmdate('Y-m-d H:i:s', current_time('timestamp', true) + PaymentOperations::timeout_seconds('card'));
                 }
                 $config = SellerRepository::config((int) $purchase['config_id']);
                 if ($config === null || (int) $config['card_enabled'] !== 1
@@ -141,10 +154,13 @@ final class WayForPayGateway extends \WC_Payment_Gateway
 
                 $existing = $wpdb->get_row($wpdb->prepare(
                     'SELECT * FROM ' . PurchaseRepository::attempts_table()
-                    . ' WHERE purchase_id=%d AND channel=%s AND status=%s ORDER BY id DESC LIMIT 1 FOR UPDATE',
-                    (int) $purchase['id'], 'card', 'issued'
+                    . ' WHERE purchase_id=%d AND status=%s ORDER BY id DESC LIMIT 1 FOR UPDATE',
+                    (int) $purchase['id'], 'issued'
                 ), ARRAY_A);
                 if (is_array($existing)) {
+                    if ((string) $existing['channel'] !== 'card') {
+                        throw new \RuntimeException('A different payment method already has an active attempt for this order.');
+                    }
                     $payload = json_decode((string) $existing['payload'], true);
                     if (!is_array($payload)) {
                         throw new \RuntimeException('The saved payment form is invalid.');
@@ -190,11 +206,12 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                     'payload' => $encoded,
                     'status' => 'issued',
                     'issued_at' => current_time('mysql', true),
-                    'expires_at' => null,
+                    'expires_at' => $expiresAt,
                 ]);
                 if ($wpdb->update(PurchaseRepository::purchases_table(), [
                     'state' => 'awaiting_payment',
                     'locked_at' => current_time('mysql', true),
+                    'expires_at' => $expiresAt,
                     'updated_at' => current_time('mysql', true),
                 ], ['id' => (int) $purchase['id']]) === false) {
                     throw new \RuntimeException('Could not lock purchase terms for payment.');
@@ -344,6 +361,9 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                     $isApproved = $status === 'Approved';
                     $order = wc_get_order($orderId);
                     $closedOrder = !$order || !in_array($order->get_status(), ['pending', 'on-hold'], true);
+                    $deadlineOpen = (string) $purchase['state'] === 'awaiting_payment'
+                        && !empty($purchase['expires_at'])
+                        && (string) $purchase['expires_at'] > current_time('mysql', true);
                     $snapshotMatches = false;
                     if ($order instanceof \WC_Order) {
                         try {
@@ -362,7 +382,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                             'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
                             (int) $purchase['id']
                         ));
-                        $classification = (!$amountMatch || !$currencyMatch || $closedOrder || !$snapshotMatches || $prior > 0)
+                        $classification = (!$amountMatch || !$currencyMatch || $closedOrder || !$deadlineOpen || !$snapshotMatches || $prior > 0)
                             ? 'needs_review' : 'accepted';
                         $receiptId = PurchaseRepository::insert_receipt([
                             'purchase_id' => (int) $purchase['id'],
@@ -381,10 +401,16 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                         $hasAcceptedReceipt = $prior > 0
                             && in_array((string) $purchase['state'], ['paid', 'paid_review'], true);
                         $newState = $classification === 'accepted' ? 'paid' : ($hasAcceptedReceipt ? 'paid_review' : 'review');
-                        if ($wpdb->update(PurchaseRepository::purchases_table(), [
+                        $purchaseUpdate = [
                             'state' => $newState,
                             'updated_at' => current_time('mysql', true),
-                        ], ['id' => (int) $purchase['id']]) === false
+                        ];
+                        if ($classification === 'accepted') {
+                            $purchaseUpdate['accepted_receipt_id'] = $receiptId;
+                            $purchaseUpdate['execution_state'] = 'pending';
+                            $purchaseUpdate['execution_updated_at'] = current_time('mysql', true);
+                        }
+                        if ($wpdb->update(PurchaseRepository::purchases_table(), $purchaseUpdate, ['id' => (int) $purchase['id']]) === false
                             || $wpdb->update(PurchaseRepository::attempts_table(), ['status' => 'approved'], ['id' => (int) $attempt['id']]) === false) {
                             throw new \RuntimeException('Could not persist the approved payment state.');
                         }
@@ -443,6 +469,12 @@ final class WayForPayGateway extends \WC_Payment_Gateway
             }
         } finally {
             PurchaseRepository::release_order_lock($orderId);
+        }
+
+        $latestPurchase = PurchaseRepository::for_order($orderId);
+        if ($latestPurchase !== null && (string) $latestPurchase['execution_state'] === 'pending'
+            && in_array((string) $latestPurchase['state'], ['paid', 'free'], true)) {
+            PurchaseExecutionService::schedule((int) $latestPurchase['id']);
         }
 
         $time = time();

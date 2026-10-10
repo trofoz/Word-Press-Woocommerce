@@ -33,6 +33,18 @@ require_once WFPMS_DIR . 'src/class-installer.php';
 require_once WFPMS_DIR . 'src/class-purchase-repository.php';
 require_once WFPMS_DIR . 'src/class-order-purchase-service.php';
 require_once WFPMS_DIR . 'src/class-order-mutation-guard.php';
+require_once WFPMS_DIR . 'src/class-purchase-execution-service.php';
+require_once WFPMS_DIR . 'src/class-payment-operations.php';
+add_action('before_woocommerce_init', static function (): void {
+    if (class_exists('Automattic\\WooCommerce\\Utilities\\FeaturesUtil')) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'cart_checkout_blocks', WFPMS_FILE, true
+        );
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+            'custom_order_tables', WFPMS_FILE, true
+        );
+    }
+});
 
 register_activation_hook(WFPMS_FILE, [Installer::class, 'activate']);
 add_action('plugins_loaded', static function (): void {
@@ -53,6 +65,12 @@ add_action('plugins_loaded', static function (): void {
     OrderMutationGuard::boot();
     OrderPurchaseService::boot();
     require_once WFPMS_DIR . 'src/class-wayforpay-gateway.php';
+    require_once WFPMS_DIR . 'src/class-bank-transfer-gateway.php';
+    require_once WFPMS_DIR . 'src/class-blocks-integration.php';
     WayForPayGateway::boot();
+    BankTransferGateway::boot();
+    PaymentOperations::boot();
+    PurchaseExecutionService::boot();
+    BlocksIntegration::boot();
     add_filter('woocommerce_payment_gateways', [WayForPayGateway::class, 'register']);
 }, 20);

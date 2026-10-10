@@ -5,7 +5,7 @@ namespace WfpMultiSeller;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = 2;
+    public const SCHEMA_VERSION = 3;
 
     public static function activate(): void
     {
@@ -92,6 +92,14 @@ final class Installer
             currency char(3) NOT NULL,
             state varchar(32) NOT NULL DEFAULT 'ready',
             locked_at datetime DEFAULT NULL,
+            expires_at datetime DEFAULT NULL,
+            accepted_receipt_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            free_basis longtext NULL,
+            execution_state varchar(24) NOT NULL DEFAULT 'none',
+            execution_token char(36) NOT NULL DEFAULT '',
+            execution_started_at datetime DEFAULT NULL,
+            execution_updated_at datetime DEFAULT NULL,
+            execution_error_code varchar(64) NOT NULL DEFAULT '',
             created_at datetime NOT NULL,
             updated_at datetime NOT NULL,
             PRIMARY KEY  (id),
@@ -131,6 +139,10 @@ final class Installer
             currency char(3) NOT NULL,
             transaction_status varchar(64) NOT NULL,
             classification varchar(32) NOT NULL,
+            actual_recipient varchar(191) NOT NULL DEFAULT '',
+            occurred_at datetime DEFAULT NULL,
+            time_evidence varchar(24) NOT NULL DEFAULT 'provider',
+            recorded_by bigint(20) unsigned DEFAULT NULL,
             first_event_id bigint(20) unsigned NOT NULL DEFAULT 0,
             recorded_at datetime NOT NULL,
             PRIMARY KEY  (id),
@@ -145,6 +157,9 @@ final class Installer
             receipt_id bigint(20) unsigned NOT NULL DEFAULT 0,
             dedupe_key char(64) NOT NULL,
             kind varchar(32) NOT NULL,
+            actor_id bigint(20) unsigned DEFAULT NULL,
+            reason varchar(500) NOT NULL DEFAULT '',
+            related_event_id bigint(20) unsigned NOT NULL DEFAULT 0,
             evidence longtext NOT NULL,
             received_at datetime NOT NULL,
             PRIMARY KEY  (id),
