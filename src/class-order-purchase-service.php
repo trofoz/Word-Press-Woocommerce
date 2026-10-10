@@ -48,25 +48,14 @@ final class OrderPurchaseService
 
     public static function validate_add_to_cart(bool $passed, int $productId, int $quantity, int $variationId = 0, array $variation = [], array $cartItemData = []): bool
     {
-        if (!$passed || !function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+        if (!$passed) {
             return $passed;
         }
         $candidateId = $variationId > 0 ? $variationId : $productId;
-        $candidate = ProductRouting::resolve($candidateId);
-        if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
-            wc_add_notice(__('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller'), 'error');
+        $error = self::add_to_cart_error($candidateId);
+        if ($error !== null) {
+            wc_add_notice($error, 'error');
             return false;
-        }
-        foreach (WC()->cart->get_cart() as $item) {
-            $itemId = ProductRouting::cart_item_product_id($item);
-            $existing = ProductRouting::resolve($itemId);
-            if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
-                wc_add_notice(
-                    __('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller'),
-                    'error'
-                );
-                return false;
-            }
         }
         return true;
     }
@@ -74,20 +63,28 @@ final class OrderPurchaseService
     /** Prevent Store API (Cart/Checkout Blocks) from adding products from another seller. */
     public static function validate_store_api_add_to_cart(\WC_Product $product, array $request): void
     {
-        if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
-            return;
+        $error = self::add_to_cart_error((int) $product->get_id());
+        if ($error !== null) {
+            throw new \Exception($error);
         }
+    }
 
-        $candidate = ProductRouting::resolve((int) $product->get_id());
+    private static function add_to_cart_error(int $candidateId): ?string
+    {
+        if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+            return null;
+        }
+        $candidate = ProductRouting::resolve($candidateId);
         if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
-            throw new \Exception(__('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller'));
+            return __('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller');
         }
         foreach (WC()->cart->get_cart() as $item) {
             $existing = ProductRouting::resolve(ProductRouting::cart_item_product_id($item));
             if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
-                throw new \Exception(__('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller'));
+                return __('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller');
             }
         }
+        return null;
     }
 
     public static function filter_cart_gateways(array $gateways): array
