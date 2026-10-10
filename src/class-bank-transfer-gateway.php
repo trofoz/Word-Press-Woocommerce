@@ -248,7 +248,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
     {
         $sellerIds = [];
         foreach (WC()->cart->get_cart() as $item) {
-            $productId = (int) ($item['variation_id'] ?? $item['product_id'] ?? 0);
+            $productId = ProductRouting::cart_item_product_id($item);
             $resolved = ProductRouting::resolve($productId);
             if (!$resolved['ok'] || !is_int($resolved['seller_id'])) {
                 return 0;

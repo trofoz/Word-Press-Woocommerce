@@ -1,15 +1,16 @@
 # WayForPay Multi-Seller for WooCommerce
 
 Локальний форк `wayforpay/Word-Press-Woocommerce` зі збереженою історією upstream.
-Етапи 1–7: аудит, seller-модель, профілі, purchase/payment core, IBAN operations і Checkout Blocks, 10.10.2026.
+Етапи 1–8: аудит, seller-модель, purchase/payment core, IBAN operations, Checkout Blocks і міграційний адаптер, 10.10.2026.
 
-**Це рання розробка, не готовий до живих платежів плагін.** Реалізовані seller routing, purchase snapshots, картковий/IBAN gateway та базовий Checkout Blocks adapter. Інтеграційне приймання у WordPress/WooCommerce і WayForPay sandbox, міграція історичних замовлень та повна перевірка критеріїв PRD ще не виконані.
+**Це рання розробка, не готовий до живих платежів плагін.** Додано адмінський імпорт старого мерчанта, явну прив’язку відкритих історичних замовлень і callback adapter для таких замовлень. Міграція реальних замовлень магазину, інтеграційне приймання у WordPress/WooCommerce та WayForPay sandbox і повна перевірка критеріїв PRD ще не виконані.
 
 ## Документи
 
 - [Результати етапів 1–2](docs/stages-1-2.md).
 - [Реалізація етапу 3](docs/stage-3.md).
 - [Реалізація етапів 6–7 і відкриті межі](docs/stages-6-7.md).
+- [Етап 8: міграція оригінального шлюзу](docs/stage-8.md).
 - [Аудит і карта використання коду](docs/audit-and-reuse.md).
 - [Фінансова модель та конкурентні операції](docs/financial-model.md).
 - [Переходи станів](docs/state-transitions.md).
@@ -26,7 +27,7 @@
 | Префікс таблиць після `$wpdb->prefix` | `wfpms_` |
 | Нові gateway IDs | `wfpms_card`, `wfpms_iban` |
 | Новий callback | `wc-api=wfpms_callback` |
-| Історичний callback | `wc-api=WC_wayforpay`, лише підтверджено мігровані замовлення |
+| Історичний callback | upstream надсилає `wc-api=WC_wayforpay`; WooCommerce hook `wc_wayforpay`, лише явно мігровані замовлення |
 
 Версія нового плагіна починається з `0.1.0-dev`; upstream `1.0` не є її версією.
 

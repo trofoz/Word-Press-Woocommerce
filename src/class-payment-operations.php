@@ -30,6 +30,49 @@ final class PaymentOperations
         return max(1, min(720, $hours)) * HOUR_IN_SECONDS;
     }
 
+    /** @return array<string,string> Payment gateway ID => admin title. */
+    public static function external_gateway_options(): array
+    {
+        if (!function_exists('WC') || !WC()->payment_gateways()) {
+            return [];
+        }
+        $options = [];
+        foreach (WC()->payment_gateways()->payment_gateways() as $id => $gateway) {
+            if (in_array((string) $id, ['wfpms_card', 'wfpms_iban', 'wayforpay'], true)) {
+                continue;
+            }
+            $options[(string) $id] = (string) (method_exists($gateway, 'get_title') ? $gateway->get_title() : $id);
+        }
+        return $options;
+    }
+
+    /** @return list<string> */
+    public static function sanitize_external_gateway_ids($raw, array $knownIds): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+        $known = array_fill_keys(array_map('strval', $knownIds), true);
+        $ids = [];
+        foreach ($raw as $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $id = sanitize_key((string) $value);
+            if ($id !== '' && isset($known[$id])) {
+                $ids[$id] = true;
+            }
+        }
+        return array_keys($ids);
+    }
+
+    /** @return list<string> */
+    public static function allowed_external_gateway_ids(): array
+    {
+        $stored = get_option('wfpms_allowed_external_gateways', []);
+        return self::sanitize_external_gateway_ids($stored, array_keys(self::external_gateway_options()));
+    }
+
     public static function register_page(): void
     {
         add_submenu_page(
@@ -77,6 +120,14 @@ final class PaymentOperations
         update_option('wfpms_card_timeout_hours', $cardHours, false);
         update_option('wfpms_iban_timeout_hours', $ibanHours, false);
         update_option('wfpms_allow_zero_total', isset($_POST['allow_zero_total']) ? 'yes' : 'no', false);
+        $knownGatewayIds = array_keys(self::external_gateway_options());
+        $submittedGatewayIds = isset($_POST['allowed_external_gateways'])
+            ? wp_unslash($_POST['allowed_external_gateways']) : [];
+        update_option(
+            'wfpms_allowed_external_gateways',
+            self::sanitize_external_gateway_ids($submittedGatewayIds, $knownGatewayIds),
+            false
+        );
         self::redirect('saved');
     }
 
@@ -361,6 +412,18 @@ final class PaymentOperations
         echo '<p><label>' . esc_html__('Строк карткової оплати, годин', 'wayforpay-multi-seller') . ' <input type="number" min="1" max="720" required name="card_timeout_hours" value="' . esc_attr((string) absint(get_option('wfpms_card_timeout_hours', 24))) . '"></label></p>';
         echo '<p><label>' . esc_html__('Строк переказу на IBAN, годин', 'wayforpay-multi-seller') . ' <input type="number" min="1" max="720" required name="iban_timeout_hours" value="' . esc_attr((string) absint(get_option('wfpms_iban_timeout_hours', 72))) . '"></label></p>';
         echo '<p><label><input type="checkbox" name="allow_zero_total" value="1"' . checked(self::zero_total_enabled(), true, false) . '> ' . esc_html__('Дозволити безоплатні замовлення за серверним знімком WooCommerce', 'wayforpay-multi-seller') . '</label></p>';
+        echo '<fieldset><legend><strong>' . esc_html__('Дозволені сторонні способи оплати', 'wayforpay-multi-seller') . '</strong></legend>';
+        echo '<p>' . esc_html__('Виберіть лише методи, які погоджено для всіх продавців. Для кошика з продавцем інші сторонні методи буде приховано.', 'wayforpay-multi-seller') . '</p>';
+        $selected = self::allowed_external_gateway_ids();
+        foreach (self::external_gateway_options() as $gatewayId => $title) {
+            echo '<label style="display:block"><input type="checkbox" name="allowed_external_gateways[]" value="' . esc_attr($gatewayId) . '"'
+                . checked(in_array($gatewayId, $selected, true), true, false) . '> '
+                . esc_html($title . ' (' . $gatewayId . ')') . '</label>';
+        }
+        if (self::external_gateway_options() === []) {
+            echo '<p>' . esc_html__('Сторонні платіжні методи не зареєстровані.', 'wayforpay-multi-seller') . '</p>';
+        }
+        echo '</fieldset>';
         submit_button(__('Зберегти політику', 'wayforpay-multi-seller'));
         echo '</form>';
     }

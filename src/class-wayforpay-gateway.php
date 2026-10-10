@@ -67,7 +67,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
         }
         $sellerIds = [];
         foreach (WC()->cart->get_cart() as $cartItem) {
-            $productId = (int) ($cartItem['variation_id'] ?? $cartItem['product_id'] ?? 0);
+            $productId = ProductRouting::cart_item_product_id($cartItem);
             $resolution = ProductRouting::resolve($productId);
             if (!$resolution['ok'] || !is_int($resolution['seller_id'])) {
                 return false;

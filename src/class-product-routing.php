@@ -8,6 +8,16 @@ final class ProductRouting
 {
     public const META_SELLER_ID = '_wfpms_seller_id';
 
+    /** Resolve the effective product ID in a WooCommerce cart item. */
+    public static function cart_item_product_id(array $cartItem): int
+    {
+        $variationId = (int) ($cartItem['variation_id'] ?? 0);
+        if ($variationId > 0) {
+            return $variationId;
+        }
+        return (int) ($cartItem['product_id'] ?? 0);
+    }
+
     /** @return array{ok:bool,seller_id:?int,source:string,reason:string,seller:?array} */
     public static function resolve(int $productId): array
     {

@@ -9,6 +9,7 @@ final class BlocksIntegration
     public static function boot(): void
     {
         add_action('woocommerce_blocks_payment_method_type_registration', [self::class, 'register_methods']);
+        add_action('woocommerce_blocks_checkout_block_registration', [self::class, 'register_checkout_label']);
     }
 
     public static function register_methods($registry): void
@@ -19,6 +20,50 @@ final class BlocksIntegration
         }
         $registry->register(new CardBlocksMethod());
         $registry->register(new IbanBlocksMethod());
+    }
+
+    public static function register_checkout_label($registry): void
+    {
+        $interface = 'Automattic\\WooCommerce\\Blocks\\Integrations\\IntegrationInterface';
+        if (interface_exists($interface) && is_object($registry) && method_exists($registry, 'register')) {
+            $registry->register(new CheckoutSellerLabelIntegration());
+        }
+    }
+}
+
+if (interface_exists('Automattic\\WooCommerce\\Blocks\\Integrations\\IntegrationInterface')) {
+    final class CheckoutSellerLabelIntegration implements \Automattic\WooCommerce\Blocks\Integrations\IntegrationInterface
+    {
+        public function get_name(): string
+        {
+            return 'wfpms-checkout-seller';
+        }
+
+        public function initialize(): void
+        {
+            wp_register_script(
+                'wfpms-checkout-seller-label',
+                WFPMS_URL . 'assets/js/checkout-seller-label.js',
+                ['wc-blocks-checkout', 'wp-plugins', 'wp-element', 'wp-i18n'],
+                WFPMS_VERSION,
+                true
+            );
+        }
+
+        public function get_script_handles(): array
+        {
+            return ['wfpms-checkout-seller-label'];
+        }
+
+        public function get_editor_script_handles(): array
+        {
+            return [];
+        }
+
+        public function get_script_data(): array
+        {
+            return ['sellerName' => OrderPurchaseService::checkout_seller_name()];
+        }
     }
 }
 
@@ -60,6 +105,10 @@ if (class_exists('Automattic\\WooCommerce\\Blocks\\Payments\\Integrations\\Abstr
             $description = $this->gatewayId === 'wfpms_iban'
                 ? __('Реквізити рахунку продавця з’являться після оформлення замовлення.', 'wayforpay-multi-seller')
                 : __('Безпечна оплата карткою через WayForPay.', 'wayforpay-multi-seller');
+            $sellerName = OrderPurchaseService::checkout_seller_name();
+            if ($sellerName !== '') {
+                $description .= ' ' . sprintf(__('Продавець: %s.', 'wayforpay-multi-seller'), $sellerName);
+            }
             return [
                 'title' => $this->methodTitle,
                 'description' => $description,

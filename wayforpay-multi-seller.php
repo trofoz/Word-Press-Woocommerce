@@ -35,6 +35,7 @@ require_once WFPMS_DIR . 'src/class-order-purchase-service.php';
 require_once WFPMS_DIR . 'src/class-order-mutation-guard.php';
 require_once WFPMS_DIR . 'src/class-purchase-execution-service.php';
 require_once WFPMS_DIR . 'src/class-payment-operations.php';
+require_once WFPMS_DIR . 'src/class-legacy-migration.php';
 add_action('before_woocommerce_init', static function (): void {
     if (class_exists('Automattic\\WooCommerce\\Utilities\\FeaturesUtil')) {
         \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
@@ -62,6 +63,7 @@ add_action('plugins_loaded', static function (): void {
     Installer::maybe_upgrade();
     ProductEditor::boot();
     Admin::boot();
+    LegacyMigration::boot();
     OrderMutationGuard::boot();
     OrderPurchaseService::boot();
     require_once WFPMS_DIR . 'src/class-wayforpay-gateway.php';

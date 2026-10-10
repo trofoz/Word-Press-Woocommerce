@@ -14,6 +14,141 @@ final class Admin
         add_action('admin_post_wfpms_archive_seller', [self::class, 'handle_archive_seller']);
         add_action('admin_post_wfpms_activate_seller', [self::class, 'handle_activate_seller']);
         add_action('admin_post_wfpms_save_category_rules', [self::class, 'handle_save_category_rules']);
+        add_filter('manage_edit-shop_order_columns', [self::class, 'add_legacy_order_seller_column']);
+        add_action('manage_shop_order_posts_custom_column', [self::class, 'render_legacy_order_seller_column'], 10, 2);
+        add_action('restrict_manage_posts', [self::class, 'render_legacy_order_seller_filter']);
+        add_action('pre_get_posts', [self::class, 'filter_legacy_orders_by_seller']);
+        add_filter('manage_woocommerce_page_wc-orders_columns', [self::class, 'add_hpos_order_seller_column']);
+        add_action('manage_woocommerce_page_wc-orders_custom_column', [self::class, 'render_hpos_order_seller_column'], 10, 2);
+        add_action('woocommerce_order_list_table_restrict_manage_orders', [self::class, 'render_hpos_order_seller_filter'], 10, 2);
+        add_filter('woocommerce_order_list_table_prepare_items_query_args', [self::class, 'filter_hpos_orders_by_seller']);
+    }
+
+    public static function add_legacy_order_seller_column(array $columns): array
+    {
+        return self::insert_seller_column($columns);
+    }
+
+    public static function add_hpos_order_seller_column(array $columns): array
+    {
+        return self::insert_seller_column($columns);
+    }
+
+    private static function insert_seller_column(array $columns): array
+    {
+        $result = [];
+        foreach ($columns as $key => $label) {
+            $result[$key] = $label;
+            if ($key === 'order_status') {
+                $result['wfpms_seller'] = __('Продавець', 'wayforpay-multi-seller');
+            }
+        }
+        if (!isset($result['wfpms_seller'])) {
+            $result['wfpms_seller'] = __('Продавець', 'wayforpay-multi-seller');
+        }
+        return $result;
+    }
+
+    public static function render_legacy_order_seller_column(string $column, $postId): void
+    {
+        if ($column === 'wfpms_seller') {
+            self::render_order_seller_value((int) $postId);
+        }
+    }
+
+    public static function render_hpos_order_seller_column(string $column, $order): void
+    {
+        if ($column === 'wfpms_seller') {
+            $orderId = $order instanceof \WC_Order ? (int) $order->get_id() : (int) $order;
+            self::render_order_seller_value($orderId);
+        }
+    }
+
+    private static function render_order_seller_value(int $orderId): void
+    {
+        $order = wc_get_order($orderId);
+        if (!$order instanceof \WC_Order) {
+            echo '—';
+            return;
+        }
+        $sellerId = (int) $order->get_meta('_wfpms_seller_id', true);
+        $seller = $sellerId > 0 ? SellerRepository::find($sellerId) : null;
+        $snapshot = $order->get_meta('_wfpms_seller_snapshot', true);
+        $legalName = is_array($snapshot) ? (string) ($snapshot['legal_name'] ?? '') : '';
+        if ($legalName === '' && $seller !== null) {
+            $legalName = (string) $seller['legal_name'];
+        }
+        $label = is_array($snapshot) ? (string) ($snapshot['seller_label'] ?? '') : '';
+        if ($label === '' && $seller !== null) {
+            $label = (string) $seller['internal_label'];
+        }
+        echo esc_html(implode(' — ', array_filter([$label, $legalName], static fn(string $part): bool => $part !== '')) ?: '—');
+    }
+
+    public static function render_legacy_order_seller_filter(): void
+    {
+        global $typenow;
+        if ($typenow === 'shop_order') {
+            self::render_order_seller_filter_control();
+        }
+    }
+
+    public static function render_hpos_order_seller_filter(string $orderType, string $which): void
+    {
+        if ($orderType === 'shop_order' && $which === 'top') {
+            self::render_order_seller_filter_control();
+        }
+    }
+
+    private static function render_order_seller_filter_control(): void
+    {
+        $selected = isset($_GET['wfpms_seller_filter']) && is_scalar($_GET['wfpms_seller_filter'])
+            ? absint(wp_unslash((string) $_GET['wfpms_seller_filter'])) : 0;
+        echo '<select name="wfpms_seller_filter"><option value="">' . esc_html__('Усі продавці', 'wayforpay-multi-seller') . '</option>';
+        foreach (SellerRepository::all() as $seller) {
+            $sellerId = (int) $seller['id'];
+            echo '<option value="' . esc_attr((string) $sellerId) . '"' . selected($selected, $sellerId, false) . '>'
+                . esc_html((string) $seller['internal_label'] . ' — ' . (string) $seller['legal_name']) . '</option>';
+        }
+        echo '</select>';
+    }
+
+    public static function filter_hpos_orders_by_seller(array $queryArgs): array
+    {
+        $sellerId = self::requested_seller_filter();
+        if ($sellerId > 0) {
+            $queryArgs['meta_query'] = self::seller_meta_query($queryArgs['meta_query'] ?? [], $sellerId);
+        }
+        return $queryArgs;
+    }
+
+    public static function filter_legacy_orders_by_seller($query): void
+    {
+        if (!is_admin() || !$query instanceof \WP_Query || !$query->is_main_query()
+            || !in_array('shop_order', (array) $query->get('post_type'), true)) {
+            return;
+        }
+        $sellerId = self::requested_seller_filter();
+        if ($sellerId > 0) {
+            $query->set('meta_query', self::seller_meta_query($query->get('meta_query') ?: [], $sellerId));
+        }
+    }
+
+    private static function requested_seller_filter(): int
+    {
+        return isset($_GET['wfpms_seller_filter']) && is_scalar($_GET['wfpms_seller_filter'])
+            ? absint(wp_unslash((string) $_GET['wfpms_seller_filter'])) : 0;
+    }
+
+    private static function seller_meta_query($metaQuery, int $sellerId): array
+    {
+        $metaQuery = is_array($metaQuery) ? $metaQuery : [];
+        $metaQuery[] = [
+            'key' => '_wfpms_seller_id',
+            'value' => (string) $sellerId,
+            'compare' => '=',
+        ];
+        return $metaQuery;
     }
 
     public static function register_pages(): void

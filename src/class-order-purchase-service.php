@@ -9,10 +9,12 @@ final class OrderPurchaseService
     public static function boot(): void
     {
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
+        add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
         add_filter('woocommerce_available_payment_gateways', [self::class, 'filter_cart_gateways'], 100);
+        add_filter('woocommerce_gateway_title', [self::class, 'filter_gateway_title'], 10, 2);
     }
 
     public static function finalize_checkout_order($order): void
@@ -55,7 +57,7 @@ final class OrderPurchaseService
             return false;
         }
         foreach (WC()->cart->get_cart() as $item) {
-            $itemId = (int) ($item['variation_id'] ?? $item['product_id'] ?? 0);
+            $itemId = ProductRouting::cart_item_product_id($item);
             $existing = ProductRouting::resolve($itemId);
             if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
                 wc_add_notice(
@@ -70,6 +72,7 @@ final class OrderPurchaseService
 
     public static function filter_cart_gateways(array $gateways): array
     {
+        $external = self::allowed_external_gateways($gateways);
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));
             $purchase = $orderId > 0 ? PurchaseRepository::for_order($orderId) : null;
@@ -85,7 +88,7 @@ final class OrderPurchaseService
                 if ((int) $config['iban_enabled'] === 1 && isset($gateways['wfpms_iban'])) {
                     $allowed['wfpms_iban'] = $gateways['wfpms_iban'];
                 }
-                return $allowed;
+                return $allowed + $external;
             }
             return $gateways;
         }
@@ -112,7 +115,68 @@ final class OrderPurchaseService
         if ((int) $config['iban_enabled'] === 1 && isset($gateways['wfpms_iban'])) {
             $allowed['wfpms_iban'] = $gateways['wfpms_iban'];
         }
-        return $allowed;
+        return $allowed + $external;
+    }
+
+    /** Include only methods explicitly approved by the store operator. */
+    private static function allowed_external_gateways(array $gateways): array
+    {
+        return self::filter_external_gateways($gateways, PaymentOperations::allowed_external_gateway_ids());
+    }
+
+    /** @param array<string,mixed> $gateways @param list<string> $allowedIds @return array<string,mixed> */
+    public static function filter_external_gateways(array $gateways, array $allowedIds): array
+    {
+        $filtered = [];
+        foreach ($allowedIds as $gatewayId) {
+            if (isset($gateways[$gatewayId])) {
+                $filtered[$gatewayId] = $gateways[$gatewayId];
+            }
+        }
+        return $filtered;
+    }
+
+    /** Full legal recipient shown alongside each available seller payment method. */
+    public static function checkout_seller_name(): string
+    {
+        if (function_exists('WC') && WC()->cart && !WC()->cart->is_empty()) {
+            $resolution = self::seller_for_cart();
+            if ($resolution['ok'] && is_int($resolution['seller_id'])) {
+                $config = SellerRepository::current_config($resolution['seller_id']);
+                return $config === null ? '' : (string) $config['recipient_name'];
+            }
+            return '';
+        }
+        if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
+            $orderId = absint(get_query_var('order-pay'));
+            $order = $orderId > 0 ? wc_get_order($orderId) : false;
+            if ($order instanceof \WC_Order) {
+                $snapshot = $order->get_meta('_wfpms_seller_snapshot', true);
+                if (is_array($snapshot) && !empty($snapshot['legal_name'])) {
+                    return (string) $snapshot['legal_name'];
+                }
+            }
+        }
+        return '';
+    }
+
+    public static function render_checkout_seller(): void
+    {
+        $sellerName = self::checkout_seller_name();
+        if ($sellerName !== '') {
+            echo '<p class="wfpms-checkout-seller"><strong>'
+                . esc_html__('Продавець:', 'wayforpay-multi-seller') . '</strong> '
+                . esc_html($sellerName) . '</p>';
+        }
+    }
+
+    public static function filter_gateway_title(string $title, string $gatewayId): string
+    {
+        if (!in_array($gatewayId, ['wfpms_card', 'wfpms_iban'], true)) {
+            return $title;
+        }
+        $sellerName = self::checkout_seller_name();
+        return $sellerName === '' ? $title : $title . ' — ' . $sellerName;
     }
 
     /** @return array{ok:bool,seller_id:?int} */
@@ -120,7 +184,7 @@ final class OrderPurchaseService
     {
         $sellerIds = [];
         foreach (WC()->cart->get_cart() as $cartItem) {
-            $productId = (int) ($cartItem['variation_id'] ?? $cartItem['product_id'] ?? 0);
+            $productId = ProductRouting::cart_item_product_id($cartItem);
             $resolved = ProductRouting::resolve($productId);
             if (!$resolved['ok'] || !is_int($resolved['seller_id'])) {
                 return ['ok' => false, 'seller_id' => null];
@@ -186,20 +250,7 @@ final class OrderPurchaseService
                 }
                 $purchase = PurchaseRepository::for_order($orderId) ?? $purchase;
             }
-            $order->update_meta_data('_wfpms_purchase_id', (string) $purchase['id']);
-            $order->update_meta_data('_wfpms_seller_id', (string) $sellerId);
-            $order->update_meta_data('_wfpms_config_id', (string) $config['id']);
-            $order->update_meta_data('_wfpms_snapshot_hash', (string) $purchase['snapshot_hash']);
-            $order->update_meta_data('_wfpms_seller_snapshot', [
-                'seller_label' => (string) $seller['internal_label'],
-                'legal_name' => (string) $config['recipient_name'],
-                'tax_id' => (string) $config['tax_id'],
-                'iban' => (string) $config['iban'],
-                'bank_name' => (string) $config['bank_name'],
-                'merchant_account' => (string) $config['merchant_account'],
-                'config_id' => (int) $config['id'],
-            ]);
-            $order->save();
+            self::persist_seller_snapshot_meta($order, $purchase, $seller, $config);
             if ($isZero && $order->is_paid()) {
                 PurchaseExecutionService::observe_woo_payment_complete($orderId);
             }
@@ -243,6 +294,116 @@ final class OrderPurchaseService
         $snapshot = self::snapshot($order, $seller, $config, $scale);
         $snapshot['order_number'] = (string) ($savedSnapshot['order_number'] ?? $snapshot['order_number']);
         return $snapshot;
+    }
+
+    /** Creates an explicit seller mapping for an unpaid order from the original gateway. */
+    public static function migrate_legacy_order(int $orderId, int $sellerId, int $actorId): void
+    {
+        global $wpdb;
+        $order = wc_get_order($orderId);
+        if (!LegacyMigration::owns_callback_route() || !$order instanceof \WC_Order || $order->get_payment_method() !== 'wayforpay'
+            || !in_array($order->get_status(), ['pending', 'on-hold'], true) || $order->is_paid()) {
+            throw new \RuntimeException('Only unpaid, open orders from the original WayForPay gateway can be migrated.');
+        }
+        if (!PurchaseRepository::order_lock($orderId)) {
+            throw new \RuntimeException('Could not lock this order. Please retry.');
+        }
+        try {
+            if (PurchaseRepository::for_order($orderId) !== null || LegacyMigration::for_order($orderId) !== null) {
+                throw new \RuntimeException('This order already has a purchase or migration record.');
+            }
+            $seller = SellerRepository::find($sellerId);
+            $config = $seller === null ? null : LegacyMigration::imported_config_for_seller($sellerId);
+            $legacy = LegacyMigration::legacy_settings();
+            if ($seller === null || (int) $seller['active'] !== 1 || $config === null
+                || (int) $config['card_enabled'] !== 1
+                || !is_array($legacy)
+                || !hash_equals((string) ($legacy['merchant_account'] ?? ''), (string) $config['merchant_account'])) {
+                throw new \RuntimeException('The seller must have the imported legacy merchant configuration.');
+            }
+            $snapshot = self::snapshot($order, $seller, $config, wc_get_price_decimals());
+            if (preg_match('/\A0+(?:\.0+)?\z/', (string) $snapshot['amount']) === 1) {
+                throw new \RuntimeException('Zero-total legacy orders cannot be migrated for card payment.');
+            }
+            $json = wp_json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($json)) {
+                throw new \RuntimeException('Could not encode the legacy order snapshot.');
+            }
+            $now = current_time('mysql', true);
+            if ($wpdb->query('START TRANSACTION') === false) {
+                throw new \RuntimeException('Could not start migration transaction.');
+            }
+            try {
+                if ($wpdb->insert(PurchaseRepository::purchases_table(), [
+                    'order_id' => $orderId,
+                    'seller_id' => $sellerId,
+                    'config_id' => (int) $config['id'],
+                    'financial_snapshot' => $json,
+                    'snapshot_hash' => hash('sha256', $json),
+                    'amount' => $snapshot['amount'],
+                    'currency' => $snapshot['currency'],
+                    'state' => 'awaiting_payment',
+                    'locked_at' => $now,
+                    'expires_at' => null,
+                    'execution_state' => 'none',
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]) !== 1) {
+                    throw new \RuntimeException('Could not create the legacy purchase record.');
+                }
+                $purchaseId = (int) $wpdb->insert_id;
+                if ($wpdb->insert(LegacyMigration::migrations_table(), [
+                    'order_id' => $orderId,
+                    'purchase_id' => $purchaseId,
+                    'seller_id' => $sellerId,
+                    'config_id' => (int) $config['id'],
+                    'migrated_by' => $actorId,
+                    'migrated_at' => $now,
+                ]) !== 1) {
+                    throw new \RuntimeException('Could not persist the explicit legacy order mapping.');
+                }
+                if ($wpdb->query($wpdb->prepare(
+                    'UPDATE ' . SellerRepository::sellers_table() . ' SET used_at=COALESCE(used_at,%s) WHERE id=%d',
+                    $now,
+                    $sellerId
+                )) === false) {
+                    throw new \RuntimeException('Could not mark the seller profile as used.');
+                }
+                self::persist_seller_snapshot_meta($order, [
+                    'id' => $purchaseId,
+                    'seller_id' => $sellerId,
+                    'config_id' => (int) $config['id'],
+                    'snapshot_hash' => hash('sha256', $json),
+                ], $seller, $config);
+                if ($wpdb->query('COMMIT') === false) {
+                    throw new \RuntimeException('Could not commit the legacy migration.');
+                }
+            } catch (\Throwable $error) {
+                $wpdb->query('ROLLBACK');
+                throw $error;
+            }
+        } finally {
+            PurchaseRepository::release_order_lock($orderId);
+        }
+    }
+
+    /** @param array<string,mixed> $purchase @param array<string,mixed> $seller @param array<string,mixed> $config */
+    private static function persist_seller_snapshot_meta(\WC_Order $order, array $purchase, array $seller, array $config): void
+    {
+        $order->update_meta_data('_wfpms_purchase_id', (string) $purchase['id']);
+        $order->update_meta_data('_wfpms_seller_id', (string) $purchase['seller_id']);
+        $order->update_meta_data('_wfpms_config_id', (string) $purchase['config_id']);
+        $order->update_meta_data('_wfpms_snapshot_hash', (string) $purchase['snapshot_hash']);
+        $order->update_meta_data('_wfpms_seller_snapshot', [
+            'seller_label' => (string) $seller['internal_label'],
+            'legal_name' => (string) $config['recipient_name'],
+            'tax_id' => (string) $config['tax_id'],
+            'iban' => (string) $config['iban'],
+            'bank_name' => (string) $config['bank_name'],
+            'merchant_account' => (string) $config['merchant_account'],
+            'config_id' => (int) $config['id'],
+        ]);
+        $order->save();
     }
 
     private static function validate_changed_products(\WC_Order $order, array $purchase, int $sellerId): void

@@ -5,7 +5,7 @@ namespace WfpMultiSeller;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = 3;
+    public const SCHEMA_VERSION = 4;
 
     public static function activate(): void
     {
@@ -34,6 +34,7 @@ final class Installer
         $attempts = PurchaseRepository::attempts_table();
         $receipts = PurchaseRepository::receipts_table();
         $events = PurchaseRepository::events_table();
+        $legacyMigrations = LegacyMigration::migrations_table();
 
         dbDelta("CREATE TABLE {$sellers} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -167,7 +168,21 @@ final class Installer
             KEY purchase_kind (purchase_id,kind)
         ) ENGINE=InnoDB {$collation};");
 
-        foreach ([$sellers, $configs, $rules, $purchases, $attempts, $receipts, $events] as $table) {
+        dbDelta("CREATE TABLE {$legacyMigrations} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            order_id bigint(20) unsigned NOT NULL,
+            purchase_id bigint(20) unsigned NOT NULL,
+            seller_id bigint(20) unsigned NOT NULL,
+            config_id bigint(20) unsigned NOT NULL,
+            migrated_by bigint(20) unsigned NOT NULL,
+            migrated_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY order_id (order_id),
+            UNIQUE KEY purchase_id (purchase_id),
+            KEY seller_id (seller_id)
+        ) ENGINE=InnoDB {$collation};");
+
+        foreach ([$sellers, $configs, $rules, $purchases, $attempts, $receipts, $events, $legacyMigrations] as $table) {
             $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
             if ($found !== $table) {
                 return;
