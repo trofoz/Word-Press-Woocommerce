@@ -82,13 +82,6 @@ jobs:
           git -C "$UPSTREAM_PATH" checkout --detach FETCH_HEAD
           ln -s "$UPSTREAM_PATH" "$WP_PATH/wp-content/plugins/wayforpay-upstream"
           wp plugin activate wayforpay-upstream --path="$WP_PATH"
-          UPSTREAM_PATH="$RUNNER_TEMP/wayforpay-upstream"
-          git init "$UPSTREAM_PATH"
-          git -C "$UPSTREAM_PATH" remote add origin https://github.com/wayforpay/Word-Press-Woocommerce.git
-          git -C "$UPSTREAM_PATH" fetch --depth=1 origin b33c8bcb725cf02f8a546273596071024fa4a7ba
-          git -C "$UPSTREAM_PATH" checkout --detach FETCH_HEAD
-          ln -s "$UPSTREAM_PATH" "$WP_PATH/wp-content/plugins/wayforpay-upstream"
-          wp plugin activate wayforpay-upstream --path="$WP_PATH"
           if [[ '${{ matrix.hpos }}' == 1 ]]; then
             wp wc hpos enable --with-sync --path="$WP_PATH"
           fi
