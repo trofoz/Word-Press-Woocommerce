@@ -75,8 +75,11 @@ try {
     console.log(`SAFE_PAYMENT_FORM_DIAGNOSTIC ${JSON.stringify(diagnostic)}`);
     throw new Error('Could not identify the sandbox card form on the hosted payment page.');
   }
-  const returnOrigin = new URL(payment.redirect_url).origin;
+  const returnOrigin = new URL(process.env.WFPMS_TUNNEL_URL).origin;
   await page.waitForURL((url) => url.origin === returnOrigin, { timeout: 20000 }).catch(() => {});
+  if (new URL(page.url()).origin !== returnOrigin) {
+    throw new Error('The browser did not return to the disposable WooCommerce order page.');
+  }
   console.log('PASS: submitted one published test card on the WayForPay hosted sandbox page.');
 } finally {
   await browser.close();

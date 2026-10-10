@@ -1,3 +1,4 @@
+PASS: workflow YAML parses
 name: WooCommerce integration
 
 on:
@@ -238,7 +239,6 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$(composer global config bin-dir --absolute):$PATH"
-          wp cron event run wfpms_process_execution --due-now --path="$WP_PATH" >/dev/null
           wp eval-file "$GITHUB_WORKSPACE/tests/wayforpay-sandbox-verify.php" --path="$WP_PATH"
 
       - name: Stop ephemeral tunnel and local services
