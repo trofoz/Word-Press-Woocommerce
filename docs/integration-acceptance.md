@@ -16,7 +16,7 @@
 
 ## Автоматизований WooCommerce runtime
 
-Додано workflow `.github/workflows/woo-integration.yml` з окремою MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На справжньому WordPress 6.8.2 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, обидва шлюзи, Blocks registration, три профілі продавців, ручну й категорійну маршрутизацію товарів, варіацію та зчитування замовлення через активний WooCommerce order store.
+Додано workflow `.github/workflows/woo-integration.yml` з окремою MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На справжньому WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, обидва шлюзи, Blocks registration, три профілі продавців, ручну й категорійну маршрутизацію товарів, варіацію та зчитування замовлення через активний WooCommerce order store.
 
 Workflow пушиться разом із гілкою `test/stages-1-8-integration` і запускається GitHub Actions. До зеленого завершення всіх чотирьох jobs результати runtime залишаються **неперевіреними**. Цей набір не виконує зовнішній платіж у WayForPay sandbox та не замінює фінансові, callback concurrency, історичні міграції або всі 65 критеріїв PRD.
 

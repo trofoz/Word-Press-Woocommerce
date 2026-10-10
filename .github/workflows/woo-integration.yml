@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           export PATH="$(composer global config bin-dir --absolute):$PATH"
           mkdir -p "$WP_PATH"
-          wp core download --path="$WP_PATH" --version=6.8.2
+          wp core download --path="$WP_PATH" --version=7.0
           wp config create --path="$WP_PATH" \
             --dbname=wordpress_test --dbuser=wordpress --dbpass=wordpress-test-only \
             --dbhost=127.0.0.1 --dbprefix=wptest_ --skip-check
