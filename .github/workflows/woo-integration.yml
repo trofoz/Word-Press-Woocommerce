@@ -5,6 +5,12 @@ on:
     branches:
       - 'test/**'
   workflow_dispatch:
+    inputs:
+      run_wayforpay_sandbox:
+        description: 'Run one live WayForPay sandbox payment through an ephemeral, callback-only tunnel'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -82,4 +88,164 @@ jobs:
           wp option update woocommerce_checkout_page_id "$(cat "$RUNNER_TEMP/checkout-page-id")" --path="$WP_PATH"
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+
+  wayforpay-sandbox:
+    name: WayForPay sandbox payment and callback
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_wayforpay_sandbox) ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-wfp-sandbox]'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: wordpress_test
+          MARIADB_USER: wordpress
+          MARIADB_PASSWORD: wordpress-test-only
+          MARIADB_ROOT_PASSWORD: root-test-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, dom, exif, fileinfo, gd, intl, mbstring, mysqli, zip
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install disposable WordPress and WooCommerce
+        env:
+          WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
+          WP_CLI_ALLOW_ROOT: '1'
+        run: |
+          set -euo pipefail
+          export PATH="$(composer global config bin-dir --absolute):$PATH"
+          composer global require --no-interaction wp-cli/wp-cli-bundle:2.12.0
+          mkdir -p "$WP_PATH"
+          wp core download --path="$WP_PATH" --version=7.0
+          wp config create --path="$WP_PATH" \
+            --dbname=wordpress_test --dbuser=wordpress --dbpass=wordpress-test-only \
+            --dbhost=127.0.0.1 --dbprefix=wfsandbox_ --skip-check
+          wp core install --path="$WP_PATH" --url=http://127.0.0.1:8099 \
+            --title='Disposable WayForPay sandbox' \
+            --admin_user=sandbox-admin --admin_password=sandbox-only-password \
+            --admin_email=sandbox@example.test --skip-email
+          wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
+          ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
+          # Keep this encryption key unique to the disposable runner and out of logs/artifacts.
+          wp config set WFPMS_MASTER_KEY "$(php -r 'echo bin2hex(random_bytes(32));')" --type=constant --path="$WP_PATH" >/dev/null
+          wp config set WFPMS_MASTER_KEY_ID "sandbox-run" --type=constant --path="$WP_PATH" >/dev/null
+          wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
+          cat > "$RUNNER_TEMP/wp-router.php" <<'PHP'
+          <?php
+          if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+              $_SERVER['HTTPS'] = 'on';
+              $_SERVER['SERVER_PORT'] = '443';
+          }
+          $root = getenv('WFPMS_WP_PATH');
+          $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+          if (is_string($root) && $path !== false && $path !== '/' && is_file($root . $path)) {
+              return false;
+          }
+          require $root . '/index.php';
+          PHP
+          # The runner exposes only the PHP server through a separate allowlisted proxy.
+          WFPMS_WP_PATH="$WP_PATH" php -S 127.0.0.1:8099 -t "$WP_PATH" "$RUNNER_TEMP/wp-router.php" >/dev/null 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/php-server.pid"
+
+      - name: Install Cloudflare Tunnel and start callback-only proxy
+        run: |
+          set -euo pipefail
+          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloudflare-main.gpg
+          echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y cloudflared
+          WFPMS_SANDBOX_OUTPUT="$RUNNER_TEMP/wfpms-sandbox-payment.json" \
+            python3 "$GITHUB_WORKSPACE/tests/wayforpay-sandbox-proxy.py" >/dev/null 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/proxy.pid"
+          cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8098 >"$RUNNER_TEMP/cloudflared.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/cloudflared.pid"
+          for attempt in $(seq 1 60); do
+            TUNNEL_URL="$(sed -nE 's#.*(https://[a-z0-9-]+\.trycloudflare\.com).*#\1#p' "$RUNNER_TEMP/cloudflared.log" | head -n1)"
+            if [[ -n "$TUNNEL_URL" ]]; then
+              rm -f "$RUNNER_TEMP/cloudflared.log"
+              break
+            fi
+            sleep 2
+          done
+          if [[ -z "${TUNNEL_URL:-}" ]]; then
+            echo 'Cloudflare Quick Tunnel did not start.'
+            exit 1
+          fi
+          echo "::add-mask::$TUNNEL_URL"
+          echo "WFPMS_TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8098/__health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo 'Callback-only proxy did not become healthy.'
+          exit 1
+
+      - name: Seed one sandbox order using the published WayForPay test merchant
+        env:
+          WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
+          WP_CLI_ALLOW_ROOT: '1'
+          WFPMS_SANDBOX_OUTPUT: ${{ runner.temp }}/wfpms-sandbox-payment.json
+        run: |
+          set -euo pipefail
+          export PATH="$(composer global config bin-dir --absolute):$PATH"
+          merchant_secret="$(python3 - <<'PY'
+          import html, re, urllib.request
+          page = urllib.request.urlopen('https://wiki.wayforpay.com/view/852472', timeout=20).read().decode('utf-8', 'replace')
+          text = html.unescape(re.sub(r'<[^>]+>', ' ', page))
+          match = re.search(r'merchantSecretKey\s*[-–:]\s*([^\s<]+)', text)
+          if not match:
+              raise SystemExit('Could not read the published sandbox credential from WayForPay docs.')
+          print(match.group(1))
+          PY
+          )"
+          echo "::add-mask::$merchant_secret"
+          WFPMS_SANDBOX_SECRET="$merchant_secret" WFPMS_TUNNEL_URL="$WFPMS_TUNNEL_URL" \
+            wp eval-file "$GITHUB_WORKSPACE/tests/wayforpay-sandbox-seed.php" --path="$WP_PATH" >/dev/null
+          unset merchant_secret
+
+      - name: Install the headless browser
+        run: |
+          npm install --no-save playwright@1.56.0
+          npx playwright install --with-deps chromium
+
+      - name: Submit the published WayForPay sandbox test card
+        env:
+          WFPMS_SANDBOX_INPUT: ${{ runner.temp }}/wfpms-sandbox-payment.json
+        run: node tests/wayforpay-sandbox-browser.mjs
+
+      - name: Verify signed callback, accepted receipt, and WooCommerce completion
+        env:
+          WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
+          WP_CLI_ALLOW_ROOT: '1'
+          WFPMS_SANDBOX_INPUT: ${{ runner.temp }}/wfpms-sandbox-payment.json
+        run: |
+          set -euo pipefail
+          export PATH="$(composer global config bin-dir --absolute):$PATH"
+          wp cron event run wfpms_process_execution --due-now --path="$WP_PATH" >/dev/null
+          wp eval-file "$GITHUB_WORKSPACE/tests/wayforpay-sandbox-verify.php" --path="$WP_PATH"
+
+      - name: Stop ephemeral tunnel and local services
+        if: always()
+        run: |
+          for name in cloudflared proxy php-server; do
+            pid_file="$RUNNER_TEMP/$name.pid"
+            if [[ -f "$pid_file" ]]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
+          done
 

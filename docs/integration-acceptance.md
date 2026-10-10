@@ -20,6 +20,16 @@
 
 Результат: **PASS, 4/4 jobs**, запуск [38062863591](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38062863591) на commit `01b3aec`. Цей набір не виконує зовнішній платіж у WayForPay sandbox та не замінює фінансові, callback concurrency, історичні міграції або всі 65 критеріїв PRD.
 
+## Окремий WayForPay sandbox запуск
+
+Workflow має ручний параметр `run_wayforpay_sandbox`. Для одноразового запуску через push у тестову гілку commit-повідомлення також може містити маркер `[run-wfp-sandbox]`. В обох випадках окремий job створює одну тимчасову БД, тестового продавця, товар і замовлення на UAH 10; шифрує опублікований sandbox credential випадковим ключем лише на час роботи runner; подає одну опубліковану тестову картку на сторінці WayForPay; перевіряє підписаний callback, запис надходження та завершення WooCommerce-замовлення.
+
+Для callback використовується одноразовий Cloudflare Quick Tunnel до локального allowlist-проксі. Проксі пропускає тільки одноразовий URL платіжної форми одного тестового замовлення, точний WayForPay callback `wc-api=wfpms_wayforpay` і сторінку повернення цього замовлення. Інші маршрути WordPress не експонуються. Логи й artifacts не містять merchant secret, URL платежу чи callback body; процеси зупиняються в `always()` cleanup. Зовнішній тунель тимчасовий і живе лише під час job.
+
+Офіційні тестові реквізити merchant завантажуються в runner без запису в репозиторій або GitHub secrets ([WayForPay sandbox docs](https://wiki.wayforpay.com/view/852472)). Публічні картки для цього sandbox сценарію вказані в інструкції Weblium; реквізити expiry/CVV там описані як довільні, але дійсні на момент введення ([Weblium test mode](https://help.weblium.com/uk/article/pidklyuchennya-wayforpay-u-yakosti-platizhnoyi-sistemi-14ymjfz/)). Це допоміжне джерело, а не документація самого WayForPay.
+
+Фактичний sandbox результат записується після першого запуску тут, разом із посиланням на Actions run. Поки такий запуск не завершився успішно, sandbox приймання залишається **неперевіреним**.
+
 ## Потрібен окремий тестовий магазин
 
 Зафіксувати точні версії PHP, WordPress, WooCommerce, MariaDB/MySQL і upstream WayForPay до запуску. Прогнати чотири незалежні варіанти:
