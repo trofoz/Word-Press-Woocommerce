@@ -18,6 +18,15 @@ try {
 
   let filledCard = false;
   let diagnostic = [];
+  const gatewayResponses = [];
+  page.on('response', (response) => {
+    try {
+      const url = new URL(response.url());
+      if (url.hostname.endsWith('wayforpay.com')) {
+        gatewayResponses.push({ method: response.request().method(), status: response.status() });
+      }
+    } catch {}
+  });
   const deadline = Date.now() + 30000;
   while (!filledCard && Date.now() < deadline) {
     diagnostic = [];
@@ -66,8 +75,10 @@ try {
       const phone = find(/phone|mobile|телефон|номер.*тел/);
       if (phone) await phone.fill('+15555550123');
 
+      const checkoutButton = frame.getByRole('button', { name: /checkout/i }).first();
       const submit = frame.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
-      if (await submit.count()) await submit.click({ timeout: 15000 });
+      if (await checkoutButton.count()) await checkoutButton.click({ timeout: 15000 });
+      else if (await submit.count()) await submit.click({ timeout: 15000 });
       else await frame.locator('form').first().evaluate((form) => form.requestSubmit());
       filledCard = true;
       break;
@@ -103,7 +114,7 @@ try {
     .filter((text) => /success|fail|error|declin|approv|invalid|required|complete|payment|checkout|відхилен|успіш|помил|оплач|обов'язков|невірн/i.test(text))
     .slice(-8)
     .map((text) => text.slice(0, 140));
-  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; result_labels=${JSON.stringify(safeResultText)}; form_state=${JSON.stringify(formState)}; status_text=${JSON.stringify(textLines)}.`);
+  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; gateway_responses=${JSON.stringify(gatewayResponses)}; result_labels=${JSON.stringify(safeResultText)}; form_state=${JSON.stringify(formState)}; status_text=${JSON.stringify(textLines)}.`);
 } finally {
   await browser.close();
 }
