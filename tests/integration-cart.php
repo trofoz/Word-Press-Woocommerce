@@ -22,9 +22,23 @@ $firstKey = $cart->add_to_cart($sameSellerProductId, 1);
 if (!is_string($firstKey) || $firstKey === '') {
     throw new RuntimeException('Could not add the first seller product to the real WooCommerce cart.');
 }
+$directValidation = apply_filters('woocommerce_add_to_cart_validation', true, $otherSellerProductId, 1, 0, [], []);
+if ($directValidation !== false) {
+    $firstProductId = (int) ($cart->get_cart()[$firstKey]['product_id'] ?? 0);
+    $firstResolution = ProductRouting::resolve($firstProductId);
+    $otherResolution = ProductRouting::resolve($otherSellerProductId);
+    throw new RuntimeException('Mixed-seller add-to-cart validation did not reject the candidate: '
+        . wp_json_encode([
+            'hook_priority' => has_filter('woocommerce_add_to_cart_validation', [OrderPurchaseService::class, 'validate_add_to_cart']),
+            'first_seller' => $firstResolution['seller_id'] ?? null,
+            'other_seller' => $otherResolution['seller_id'] ?? null,
+            'cart_count' => $cart->get_cart_contents_count(),
+        ]));
+}
 $secondSellerResult = $cart->add_to_cart($otherSellerProductId, 1);
 if ($secondSellerResult !== false || $cart->get_cart_contents_count() !== 1) {
-    throw new RuntimeException('WooCommerce cart must reject a product assigned to another seller.');
+    throw new RuntimeException('WooCommerce cart must reject a product assigned to another seller: '
+        . wp_json_encode(['add_result' => $secondSellerResult, 'cart_count' => $cart->get_cart_contents_count()]));
 }
 $sameSellerResult = $cart->add_to_cart($sameSellerProductId, 1);
 if (!is_string($sameSellerResult) || $cart->get_cart_contents_count() !== 2) {
