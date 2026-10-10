@@ -67,7 +67,9 @@ jobs:
           wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
           ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
           wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
-          wp option update woocommerce_custom_orders_table_enabled '${{ matrix.hpos }}' --path="$WP_PATH"
+          if [[ '${{ matrix.hpos }}' == 1 ]]; then
+            wp wc hpos enable --for-new-shop --path="$WP_PATH"
+          fi
           if [[ '${{ matrix.checkout }}' == blocks ]]; then
             wp post create --path="$WP_PATH" --post_type=page --post_title=Checkout \
               --post_name=checkout --post_status=publish \
