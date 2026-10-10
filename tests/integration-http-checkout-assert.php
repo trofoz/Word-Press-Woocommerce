@@ -13,6 +13,10 @@ $ids = json_decode((string) file_get_contents($inputPath), true);
 if (!is_array($ids)) {
     throw new RuntimeException('HTTP checkout did not produce order IDs.');
 }
+$testCustomer = get_user_by('login', 'test-admin');
+if (!$testCustomer instanceof WP_User) {
+    throw new RuntimeException('Disposable test customer account is unavailable for order-pay HTTP checks.');
+}
 
 $orderPayPaths = [];
 foreach (['classic_order_id', 'blocks_order_id'] as $key) {
@@ -26,6 +30,9 @@ foreach (['classic_order_id', 'blocks_order_id'] as $key) {
         || !is_array($snapshot) || ($snapshot['legal_name'] ?? '') !== 'Integration Seller 1') {
         throw new RuntimeException("HTTP {$key} did not create an unpaid order with the expected seller snapshot.");
     }
+    // WooCommerce restricts guest order-pay pages; exercise the real form as the order owner.
+    $order->set_customer_id((int) $testCustomer->ID);
+    $order->save();
     $orderPayPaths[$key] = [
         'order_id' => $orderId,
         'url' => $order->get_checkout_payment_url(false),
