@@ -61,6 +61,10 @@ try {
       await cvv.fill('123');
       const holder = find(/card.?holder|card.?name|ім.?я власника|имя владельца/);
       if (holder) await holder.fill('SANDBOX TEST');
+      const email = find(/e.?mail/);
+      if (email) await email.fill('sandbox@example.com');
+      const phone = find(/phone|mobile|телефон|номер.*тел/);
+      if (phone) await phone.fill('+15555550123');
 
       const submit = frame.locator('button[type="submit"]:visible, input[type="submit"]:visible').first();
       if (await submit.count()) await submit.click({ timeout: 15000 });
@@ -83,7 +87,23 @@ try {
   const safeResultText = resultText
     .map((text) => text.replace(/\d/g, '#').replace(/https?:\/\/\S+/gi, '<URL>').slice(0, 120))
     .filter((text) => /success|fail|error|declin|approv|відхилен|успіш|помил|оплач|refus/i.test(text));
-  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; result_labels=${JSON.stringify(safeResultText)}.`);
+  const formState = browserReturned ? [] : await Promise.all(page.frames().map(async (frame) => ({
+    origin: (() => { try { return new URL(frame.url()).origin; } catch { return '<opaque>'; } })(),
+    fields: await frame.locator('input:visible').evaluateAll((items) => items.map((item) => ({
+      name: item.name.slice(0, 80),
+      valid: item.checkValidity(),
+    }))).catch(() => []),
+    validation_messages: await frame.locator('input:visible').evaluateAll((items) => items
+      .filter((item) => !item.checkValidity())
+      .map((item) => item.validationMessage.replace(/\d/g, '#').slice(0, 100))).catch(() => []),
+  })));
+  const textLines = browserReturned ? [] : (await page.locator('body').innerText().catch(() => ''))
+    .split(/\r?\n/)
+    .map((text) => text.replace(/\d/g, '#').replace(/https?:\/\/\S+/gi, '<URL>').trim())
+    .filter((text) => /success|fail|error|declin|approv|invalid|required|complete|payment|checkout|відхилен|успіш|помил|оплач|обов'язков|невірн/i.test(text))
+    .slice(-8)
+    .map((text) => text.slice(0, 140));
+  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; result_labels=${JSON.stringify(safeResultText)}; form_state=${JSON.stringify(formState)}; status_text=${JSON.stringify(textLines)}.`);
 } finally {
   await browser.close();
 }
