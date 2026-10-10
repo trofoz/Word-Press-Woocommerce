@@ -23,7 +23,8 @@ try {
     try {
       const url = new URL(response.url());
       if (url.hostname.endsWith('wayforpay.com')) {
-        gatewayResponses.push({ method: response.request().method(), status: response.status() });
+        const path = url.pathname.split('/').map((part) => part.length > 12 ? '<id>' : part).join('/');
+        gatewayResponses.push({ method: response.request().method(), status: response.status(), path });
       }
     } catch {}
   });
@@ -57,7 +58,11 @@ try {
       diagnostic.push({
         frame_origin: (() => { try { return new URL(frame.url()).origin; } catch { return '<opaque>'; } })(),
         visible_inputs: descriptors.map(({ safe }) => safe),
-        visible_buttons: await frame.locator('button:visible').allTextContents().catch(() => []),
+        visible_buttons: await frame.locator('button:visible').evaluateAll((buttons) => buttons.map((button) => ({
+          text: button.innerText.trim().slice(0, 80),
+          type: button.type,
+          disabled: button.disabled,
+        }))).catch(() => []),
       });
       if (!card || !cvv || (!expiry && (!month || !year))) continue;
 
@@ -67,7 +72,7 @@ try {
         await month.fill('12');
         await year.fill('2030');
       }
-      await cvv.fill('123');
+      await cvv.fill('111');
       const holder = find(/card.?holder|card.?name|ім.?я власника|имя владельца/);
       if (holder) await holder.fill('SANDBOX TEST');
       const email = find(/e.?mail/);
@@ -114,7 +119,10 @@ try {
     .filter((text) => /success|fail|error|declin|approv|invalid|required|complete|payment|checkout|відхилен|успіш|помил|оплач|обов'язков|невірн/i.test(text))
     .slice(-8)
     .map((text) => text.slice(0, 140));
-  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; gateway_responses=${JSON.stringify(gatewayResponses)}; result_labels=${JSON.stringify(safeResultText)}; form_state=${JSON.stringify(formState)}; status_text=${JSON.stringify(textLines)}.`);
+  const pageOrigins = await Promise.all(page.context().pages().map((openedPage) => {
+    try { return new URL(openedPage.url()).origin; } catch { return '<opaque>'; }
+  }));
+  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; page_origins=${JSON.stringify(pageOrigins)}; gateway_responses=${JSON.stringify(gatewayResponses)}; result_labels=${JSON.stringify(safeResultText)}; form_state=${JSON.stringify(formState)}; status_text=${JSON.stringify(textLines)}.`);
 } finally {
   await browser.close();
 }
