@@ -21,7 +21,13 @@ for checkout_kind in ("classic_order_id", "blocks_order_id"):
     if response.status != 200:
         raise RuntimeError(f"Order-pay GET for {order_id} returned HTTP {response.status}.")
     if "Integration Seller 1" not in body:
-        raise RuntimeError(f"Order-pay page for {order_id} does not show the frozen legal recipient.")
+        marker = "Переказ на рахунок"
+        start = body.find(marker)
+        excerpt = body[max(0, start - 300):start + 900] if start >= 0 else body[:1200]
+        raise RuntimeError(
+            f"Order-pay page for {order_id} does not show the frozen legal recipient; "
+            f"final URL={response.geturl()}; excerpt={excerpt!r}"
+        )
     if "payment_method_wfpms_iban" not in body:
         raise RuntimeError(f"Order-pay page for {order_id} does not show the saved IBAN method.")
     if "payment_method_wfpms_card" in body:
