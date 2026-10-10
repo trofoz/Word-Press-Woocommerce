@@ -8,6 +8,7 @@ final class OrderPurchaseService
 {
     public static function boot(): void
     {
+        add_action('parse_request', [self::class, 'restore_plain_permalink_order_pay_query_var'], 1, 1);
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
@@ -18,6 +19,23 @@ final class OrderPurchaseService
         add_action('woocommerce_store_api_validate_add_to_cart', [self::class, 'validate_store_api_add_to_cart'], 10, 2);
         add_filter('woocommerce_available_payment_gateways', [self::class, 'filter_cart_gateways'], 100);
         add_filter('woocommerce_gateway_title', [self::class, 'filter_gateway_title'], 10, 2);
+    }
+
+    /** Keep the order-pay endpoint available when WordPress uses plain permalinks. */
+    public static function restore_plain_permalink_order_pay_query_var($wp): void
+    {
+        if (!is_object($wp) || !isset($_GET['order-pay'], $_GET['pay_for_order'], $_GET['key'])
+            || !is_scalar($_GET['order-pay']) || !is_scalar($_GET['pay_for_order']) || !is_scalar($_GET['key'])
+            || (string) wp_unslash((string) $_GET['pay_for_order']) !== 'true') {
+            return;
+        }
+        $orderId = absint(wp_unslash((string) $_GET['order-pay']));
+        $order = $orderId > 0 ? wc_get_order($orderId) : false;
+        $key = wc_clean(wp_unslash((string) $_GET['key']));
+        if (!$order instanceof \WC_Order || !hash_equals($order->get_order_key(), $key)) {
+            return;
+        }
+        $wp->query_vars['order-pay'] = $orderId;
     }
 
     public static function finalize_checkout_order($order): void
