@@ -39,6 +39,7 @@ $_POST = [
     'currency' => (string) $purchase['currency'],
     'occurred_at' => $occurredAt,
 ];
+$_REQUEST = $_POST;
 
 register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, $submittedAmount, $storedOccurredAt, $orderId): void {
     $fresh = PurchaseRepository::for_order($orderId);
