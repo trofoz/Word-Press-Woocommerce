@@ -72,6 +72,7 @@ jobs:
             --admin_email=admin@example.test --skip-email
           wp config set WFPMS_MASTER_KEY "$(php -r 'echo bin2hex(random_bytes(32));')" --type=constant --path="$WP_PATH" >/dev/null
           wp config set WFPMS_MASTER_KEY_ID "integration-test" --type=constant --path="$WP_PATH" >/dev/null
+          wp config set DISABLE_WP_CRON true --raw --type=constant --path="$WP_PATH" >/dev/null
           wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
           ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
           wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
