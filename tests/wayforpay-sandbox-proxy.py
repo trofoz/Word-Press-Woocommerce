@@ -77,7 +77,25 @@ class CallbackOnlyProxy(BaseHTTPRequestHandler):
         if content_length < 1 or content_length > 65536:
             self.send_error(413)
             return
+        self._record_callback_metric("requests", 1)
         self._forward("POST")
+
+    @staticmethod
+    def _record_callback_metric(name: str, value: int) -> None:
+        metrics_path = os.environ.get("WFPMS_SANDBOX_METRICS", "")
+        if not metrics_path:
+            return
+        try:
+            with open(metrics_path, encoding="utf-8") as metrics_file:
+                metrics = json.load(metrics_file)
+        except (OSError, json.JSONDecodeError):
+            metrics = {"requests": 0, "responses": []}
+        if name == "requests":
+            metrics["requests"] = int(metrics.get("requests", 0)) + value
+        elif name == "responses":
+            metrics.setdefault("responses", []).append(value)
+        with open(metrics_path, "w", encoding="utf-8") as metrics_file:
+            json.dump(metrics, metrics_file)
 
     def _forward(self, method: str) -> None:
         body = self.rfile.read(int(self.headers.get("Content-Length", "0"))) if method == "POST" else None
@@ -95,6 +113,8 @@ class CallbackOnlyProxy(BaseHTTPRequestHandler):
             connection.request(method, self.path, body=body, headers=headers)
             response = connection.getresponse()
             response_body = response.read()
+            if method == "POST":
+                self._record_callback_metric("responses", response.status)
             self.send_response(response.status)
             for header in ("Content-Type", "Cache-Control", "Location"):
                 value = response.getheader(header)
@@ -104,6 +124,8 @@ class CallbackOnlyProxy(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(response_body)
         except (OSError, HTTPException):
+            if method == "POST":
+                self._record_callback_metric("responses", 502)
             self.send_error(502)
         finally:
             connection.close()

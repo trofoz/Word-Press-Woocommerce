@@ -25,6 +25,25 @@ do {
     usleep(1_000_000);
 } while (time() < $deadline);
 
+if ($purchase === null || (string) $purchase['state'] !== 'paid') {
+    global $wpdb;
+    $receiptCounts = $wpdb->get_results($wpdb->prepare(
+        'SELECT classification,COUNT(*) AS count FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d GROUP BY classification',
+        (int) ($purchase['id'] ?? 0)
+    ), ARRAY_A);
+    $receiptSummary = [];
+    foreach ($receiptCounts as $receiptCount) {
+        $receiptSummary[] = (string) $receiptCount['classification'] . ':' . (int) $receiptCount['count'];
+    }
+    $metricsPath = getenv('WFPMS_SANDBOX_METRICS');
+    $metrics = is_string($metricsPath) && is_file($metricsPath)
+        ? json_decode((string) file_get_contents($metricsPath), true)
+        : [];
+    echo 'SAFE_PAYMENT_DIAGNOSTIC state=' . (string) ($purchase['state'] ?? 'missing')
+        . ' receipts=' . implode(',', $receiptSummary)
+        . ' callback_requests=' . (int) ($metrics['requests'] ?? 0)
+        . ' callback_responses=' . implode(',', array_map('intval', $metrics['responses'] ?? [])) . "\n";
+}
 wfpms_sandbox_verify_assert($purchase !== null && (string) $purchase['state'] === 'paid', 'WayForPay did not deliver an accepted payment callback within two minutes.');
 wfpms_sandbox_verify_assert((int) $purchase['accepted_receipt_id'] > 0, 'Accepted callback receipt was not stored.');
 global $wpdb;

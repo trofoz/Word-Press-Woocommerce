@@ -79,7 +79,11 @@ try {
   const browserReturned = await page.waitForURL((url) => url.origin === returnOrigin, { timeout: 20000 })
     .then(() => true)
     .catch(() => false);
-  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}.`);
+  const resultText = await page.locator('[role="alert"], [aria-live], h1, h2').allTextContents().catch(() => []);
+  const safeResultText = resultText
+    .map((text) => text.replace(/\d/g, '#').replace(/https?:\/\/\S+/gi, '<URL>').slice(0, 120))
+    .filter((text) => /success|fail|error|declin|approv|відхилен|успіш|помил|оплач|refus/i.test(text));
+  console.log(`PASS: submitted one published test card; browser_return=${browserReturned}; result_labels=${JSON.stringify(safeResultText)}.`);
 } finally {
   await browser.close();
 }

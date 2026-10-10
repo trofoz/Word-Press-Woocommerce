@@ -172,6 +172,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y cloudflared
           WFPMS_SANDBOX_OUTPUT="$RUNNER_TEMP/wfpms-sandbox-payment.json" \
+          WFPMS_SANDBOX_METRICS="$RUNNER_TEMP/wfpms-sandbox-metrics.json" \
             python3 "$GITHUB_WORKSPACE/tests/wayforpay-sandbox-proxy.py" >/dev/null 2>&1 &
           echo "$!" > "$RUNNER_TEMP/proxy.pid"
           cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8098 >"$RUNNER_TEMP/cloudflared.log" 2>&1 &
@@ -235,6 +236,7 @@ jobs:
           WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
           WP_CLI_ALLOW_ROOT: '1'
           WFPMS_SANDBOX_INPUT: ${{ runner.temp }}/wfpms-sandbox-payment.json
+          WFPMS_SANDBOX_METRICS: ${{ runner.temp }}/wfpms-sandbox-metrics.json
         run: |
           set -euo pipefail
           export PATH="$(composer global config bin-dir --absolute):$PATH"
