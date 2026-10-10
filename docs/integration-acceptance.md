@@ -16,9 +16,9 @@
 
 ## Автоматизований WooCommerce runtime
 
-Додано workflow `.github/workflows/woo-integration.yml` з окремою MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На справжньому WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, обидва шлюзи, Blocks registration, три профілі продавців, ручну й категорійну маршрутизацію товарів, варіацію та зчитування замовлення через активний WooCommerce order store.
+Workflow `.github/workflows/woo-integration.yml` створює окрему MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, шлюзи, три профілі продавців, маршрутизацію товарів, callback, IBAN надходження, міграцію історичного замовлення й оновлення схеми.
 
-Результат: **PASS, 4/4 jobs**, запуск [38062863591](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38062863591) на commit `01b3aec`. Цей набір не виконує зовнішній платіж у WayForPay sandbox та не замінює фінансові, callback concurrency, історичні міграції або всі 65 критеріїв PRD.
+Останній результат: **PASS, 4/4 jobs**, [Actions run 38081880219](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38081880219), commit `96343a7`. У кожній комбінації пройшли: runtime бази та seller routing; явна міграція неоплаченого старого замовлення, відмови для повторного/закритого/оплаченого/іншого gateway; переходи власника callback route та видимості gateway; підписаний callback fixture з дублем і розбіжностями; IBAN accepted/duplicate/conflict; прострочене посилання; перехід схеми v3→v4 зі збереженням purchase, receipts, events і WooCommerce order. Callback підписував тестовий harness; hosted payment form і реальне списання цей workflow не запускав.
 
 ## Окремий WayForPay sandbox запуск
 
@@ -53,6 +53,8 @@ Workflow має ручний параметр `run_wayforpay_sandbox`. Для о
 - З upstream-плагіном перевірити початкову та передану callback-маршрутизацію, міграцію відкритого замовлення, відхилення неправильного/оплаченого/закритого замовлення й операційне прийняття тільки точного legacy receipt.
 - Перевірити повторну активацію upstream і форку, щоб callback залишався в одного визначеного власника й шлюзи не дублювалися.
 
+Безплатіжні частини частково автоматизовані в run `38081880219`: v3→v4 `dbDelta` upgrade збереження даних, явне призначення старого неоплаченого замовлення й відмови для непридатних замовлень, перемикання callback owner/gateway. Це не перевіряє повторну активацію разом зі справжнім upstream-плагіном, адмінський UI та всі стани order-pay.
+
 ## Відкриті release gates
 
 - P01: письмово підтвердити у WayForPay ідентифікацію кількох списань за одним `orderReference`.
@@ -65,4 +67,4 @@ Workflow має ручний параметр `run_wayforpay_sandbox`. Для о
 
 Поточний контейнер не має `wp`, Docker/Podman, MySQL-сервера або PHP MySQL-драйвера; локальні порти 80, 8080, 3306 і 3307 закриті. Тому runtime запуск виконується окремим workflow на тимчасовій GitHub-hosted VM з disposable DB. Harness у батьківському репозиторії лишається окремим і тестує інший плагін.
 
-Репозиторій `trofoz/Word-Press-Woocommerce` і гілка `test/stages-1-8-integration` створені; CLI авторизований, workflow додано до гілки, чотири runtime jobs пройшли. Повний WayForPay sandbox платіж лишається окремим gate: він потребує безпечного зберігання merchant credential та публічно доступного тестового callback endpoint. Не записувати секрети в репозиторій, логи, artifacts чи чат. Спільні тестові реквізити WayForPay описані на [офіційній сторінці sandbox](https://wiki.wayforpay.com/view/852472).
+Репозиторій `trofoz/Word-Press-Woocommerce` і гілка `test/stages-1-8-integration` створені; CLI авторизований. Найновіша runtime матриця — **4/4 jobs PASS**. Платіж у цьому продовженні пропущено за рішенням користувача; актуальне покриття без оплати не є підтвердженням повного проходження 65 критеріїв чи readiness до production.
