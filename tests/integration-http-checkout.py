@@ -21,7 +21,7 @@ ADDRESS = {
     "address_1": "1 Test Street",
     "address_2": "",
     "city": "Kyiv",
-    "state": "30",
+    "state": "Kyiv",
     "postcode": "01001",
     "country": "UA",
     "email": "integration-checkout@example.test",
