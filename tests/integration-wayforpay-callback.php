@@ -2,6 +2,7 @@
 
 use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\ProductRouting;
+use WfpMultiSeller\PurchaseExecutionService;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
 use WfpMultiSeller\WayForPayGateway;
@@ -133,27 +134,9 @@ $eventCountAfterRetry = (int) $wpdb->get_var($wpdb->prepare(
 ));
 wfpms_callback_integration_assert($receiptCountAfterRetry === 1 && $eventCountAfterRetry === 1, 'Repeated identical Approved callback is idempotent.');
 
-sleep(2);
 $executionArgs = [(int) $paidPurchase['id']];
-$scheduledExecution = wp_next_scheduled('wfpms_process_execution', $executionArgs);
-$scheduledPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
-echo 'SAFE_CALLBACK_EXECUTION_DIAGNOSTIC scheduled=' . ($scheduledExecution === false ? 'no' : 'yes')
-    . ' wpCronDisabled=' . (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON ? 'yes' : 'no')
-    . ' state=' . preg_replace('/[^A-Za-z_-]/', '', (string) ($scheduledPurchase['state'] ?? 'missing'))
-    . ' execution=' . preg_replace('/[^A-Za-z_-]/', '', (string) ($scheduledPurchase['execution_state'] ?? 'missing'))
-    . ' error=' . preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($scheduledPurchase['execution_error_code'] ?? '')) . "\n";
-if ($scheduledExecution !== false) {
-    \WP_CLI::runcommand('cron event run wfpms_process_execution');
-} else {
-    $executionDeadline = time() + 15;
-    do {
-        $scheduledPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
-        if ($scheduledPurchase !== null && (string) $scheduledPurchase['execution_state'] === 'done') {
-            break;
-        }
-        usleep(500_000);
-    } while (time() < $executionDeadline);
-}
+PurchaseExecutionService::run((int) $paidPurchase['id']);
+wp_clear_scheduled_hook('wfpms_process_execution', $executionArgs);
 $paidOrderId = (int) $paidOrder->get_id();
 $paidOrder = wc_get_order($paidOrderId);
 $paidPurchase = PurchaseRepository::for_order($paidOrderId);
