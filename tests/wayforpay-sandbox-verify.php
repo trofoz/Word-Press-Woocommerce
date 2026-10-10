@@ -1,4 +1,3 @@
-No syntax errors detected in tests/wayforpay-sandbox-verify.php
 <?php
 
 use WfpMultiSeller\PurchaseExecutionService;
@@ -39,6 +38,7 @@ $statusRequest = [
 ];
 $statusRequest['merchantSignature'] = hash_hmac('md5', $merchantAccount . ';' . $orderReference, $secret);
 $providerStatus = null;
+$lastProviderStatus = '';
 $providerReasonCode = '';
 $providerReason = '';
 $lastStatusHttpCode = 0;
@@ -75,6 +75,7 @@ do {
                 'WayForPay status response signature is invalid.'
             );
             $providerStatus = (string) $statusData['transactionStatus'];
+            $lastProviderStatus = $providerStatus;
             if (in_array($providerStatus, ['Approved', 'Declined', 'Expired', 'Refunded', 'Voided'], true)) {
                 break;
             }
@@ -83,13 +84,12 @@ do {
     usleep(5_000_000);
 } while (time() < $statusDeadline);
 
-if ($providerStatus === null) {
-    $safeReason = preg_replace('/https?:\/\/\S+|\d{6,}/i', '<redacted>', $providerReason);
-    echo 'SAFE_STATUS_DIAGNOSTIC http=' . $lastStatusHttpCode
-        . ' reasonCode=' . preg_replace('/[^0-9]/', '', $providerReasonCode)
-        . ' reason=' . substr((string) $safeReason, 0, 120)
-        . ' responseKeys=' . implode(',', $lastStatusKeys) . "\n";
-}
+$safeReason = preg_replace('/https?:\/\/\S+|\d{6,}/i', '<redacted>', $providerReason);
+echo 'SAFE_STATUS_DIAGNOSTIC http=' . $lastStatusHttpCode
+    . ' status=' . preg_replace('/[^A-Za-z_-]/', '', $lastProviderStatus)
+    . ' reasonCode=' . preg_replace('/[^0-9]/', '', $providerReasonCode)
+    . ' reason=' . substr((string) $safeReason, 0, 120)
+    . ' responseKeys=' . implode(',', $lastStatusKeys) . "\n";
 if ($providerStatus === 'Declined') {
     $purchase = PurchaseRepository::for_order($orderId);
     $order = wc_get_order($orderId);
