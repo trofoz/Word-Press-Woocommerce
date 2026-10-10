@@ -39,6 +39,14 @@ final class OrderPurchaseService
 
     public static function filter_cart_gateways(array $gateways): array
     {
+        if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
+            $orderId = absint(get_query_var('order-pay'));
+            if ($orderId > 0 && PurchaseRepository::for_order($orderId) !== null) {
+                return isset($gateways['wfpms_card']) ? ['wfpms_card' => $gateways['wfpms_card']] : [];
+            }
+            return $gateways;
+        }
+
         if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
             return $gateways;
         }

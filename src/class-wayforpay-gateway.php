@@ -37,7 +37,27 @@ final class WayForPayGateway extends \WC_Payment_Gateway
 
     public function is_available(): bool
     {
-        if (!parent::is_available() || !function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+        if (!parent::is_available() || !function_exists('WC')) {
+            return false;
+        }
+
+        if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
+            $orderId = absint(get_query_var('order-pay'));
+            $order = $orderId > 0 ? wc_get_order($orderId) : false;
+            $purchase = $orderId > 0 ? PurchaseRepository::for_order($orderId) : null;
+            if (!$order instanceof \WC_Order || $purchase === null
+                || !in_array($order->get_status(), ['pending', 'on-hold'], true)
+                || !in_array((string) $purchase['state'], ['ready', 'awaiting_payment'], true)) {
+                return false;
+            }
+            $config = SellerRepository::config((int) $purchase['config_id']);
+            return $config !== null && (int) $config['card_enabled'] === 1
+                && (string) $config['merchant_account'] !== ''
+                && (string) $config['merchant_domain'] !== ''
+                && SecretStore::decrypt((string) $config['secret_ciphertext']) !== null;
+        }
+
+        if (!WC()->cart || WC()->cart->is_empty()) {
             return false;
         }
         $sellerIds = [];
@@ -140,6 +160,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                 $payload = [
                     'merchantAccount' => (string) $config['merchant_account'],
                     'merchantDomainName' => (string) $config['merchant_domain'],
+                    'merchantTransactionSecureType' => 'AUTO',
                     'orderReference' => $reference,
                     'orderDate' => $orderDate,
                     'amount' => $amount,
