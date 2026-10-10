@@ -10,7 +10,7 @@ final class OrderPurchaseService
     {
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
-        add_action('woocommerce_pay_order_before_submit', [self::class, 'render_checkout_seller']);
+        add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
