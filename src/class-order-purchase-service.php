@@ -11,6 +11,7 @@ final class OrderPurchaseService
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
+        add_filter('the_content', [self::class, 'render_order_pay_checkout'], 8);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
@@ -186,6 +187,16 @@ final class OrderPurchaseService
                 . esc_html__('Продавець:', 'wayforpay-multi-seller') . '</strong> '
                 . esc_html($sellerName) . '</p>';
         }
+    }
+
+    /** Checkout Blocks does not render WooCommerce's existing order-pay form. */
+    public static function render_order_pay_checkout(string $content): string
+    {
+        if (!function_exists('is_wc_endpoint_url') || !is_wc_endpoint_url('order-pay')
+            || !function_exists('has_block') || !has_block('woocommerce/checkout', $content)) {
+            return $content;
+        }
+        return do_shortcode('[woocommerce_checkout]');
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string
