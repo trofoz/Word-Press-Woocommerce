@@ -138,7 +138,7 @@ add_status, add_headers, add_body = call(
     headers={"Nonce": nonce},
     data={},
 )
-if add_status != 200:
+if add_status not in (200, 201):
     raise RuntimeError(f"Store API product add failed: HTTP {add_status}: {add_body[:1000]!r}")
 nonce = add_headers.get("Nonce", nonce)
 blocks_status, blocks_headers, blocks_body = call(

@@ -100,7 +100,7 @@ def store_api_add(product_id):
 
 for product_id in SAME_SELLER_IDS:
     status, body = store_api_add(product_id)
-    if status != 200:
+    if status not in (200, 201):
         raise RuntimeError(f"Store API rejected same-seller product {product_id}: HTTP {status}: {body[:500]!r}")
 
 status, body = store_api_add(OTHER_SELLER_ID)
