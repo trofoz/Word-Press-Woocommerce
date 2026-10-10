@@ -6,11 +6,17 @@ namespace WfpMultiSeller;
 /** Blocks supported WooCommerce CRUD edits that could change locked purchase terms. */
 final class OrderMutationGuard
 {
+    /** @var array<int,array{order_id:int,depth:int}> Object ID to held order lock. */
+    private static array $heldLocks = [];
+
     public static function boot(): void
     {
         add_action('woocommerce_before_order_object_save', [self::class, 'guard_order'], 1, 2);
+        add_action('woocommerce_after_order_object_save', [self::class, 'release_order'], 100, 2);
         add_action('woocommerce_before_order_item_object_save', [self::class, 'guard_item'], 1, 2);
+        add_action('woocommerce_after_order_item_object_save', [self::class, 'release_item'], 100, 2);
         add_action('woocommerce_before_delete_order_item', [self::class, 'guard_delete_item'], 1, 1);
+        add_action('woocommerce_delete_order_item', [self::class, 'release_deleted_item'], 100, 1);
     }
 
     public static function guard_order($order, $dataStore = null): void
@@ -18,63 +24,81 @@ final class OrderMutationGuard
         if (!$order instanceof \WC_Order || $order->get_id() < 1) {
             return;
         }
-        $purchase = PurchaseRepository::for_order((int) $order->get_id());
-        if ($purchase === null || empty($purchase['locked_at'])) {
+        $orderId = (int) $order->get_id();
+        if (!self::acquire_for_existing_purchase($orderId, spl_object_id($order))) {
             return;
         }
-        $snapshot = json_decode((string) $purchase['financial_snapshot'], true);
-        if (!is_array($snapshot)) {
-            throw new \RuntimeException('This order has an unreadable locked purchase snapshot.');
-        }
-        $current = [
-            'amount' => wc_format_decimal($order->get_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
-            'currency' => strtoupper((string) $order->get_currency()),
-            'discount_total' => wc_format_decimal($order->get_discount_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
-            'shipping_total' => wc_format_decimal($order->get_shipping_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
-            'tax_total' => wc_format_decimal($order->get_total_tax(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
-        ];
-        foreach ($current as $key => $value) {
-            if (!isset($snapshot[$key]) || !hash_equals((string) $snapshot[$key], (string) $value)) {
-                throw new \RuntimeException('Financial terms are locked after payment begins. Create a replacement order to change them.');
+        try {
+            $purchase = PurchaseRepository::for_order($orderId);
+            if ($purchase === null || empty($purchase['locked_at'])) {
+                return;
             }
+            $snapshot = json_decode((string) $purchase['financial_snapshot'], true);
+            if (!is_array($snapshot)) {
+                throw new \RuntimeException('This order has an unreadable locked purchase snapshot.');
+            }
+            $current = [
+                'amount' => wc_format_decimal($order->get_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
+                'currency' => strtoupper((string) $order->get_currency()),
+                'discount_total' => wc_format_decimal($order->get_discount_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
+                'shipping_total' => wc_format_decimal($order->get_shipping_total(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
+                'tax_total' => wc_format_decimal($order->get_total_tax(), (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()), false),
+            ];
+            foreach ($current as $key => $value) {
+                if (!isset($snapshot[$key]) || !hash_equals((string) $snapshot[$key], (string) $value)) {
+                    throw new \RuntimeException('Financial terms are locked after payment begins. Create a replacement order to change them.');
+                }
+            }
+        } catch (\Throwable $error) {
+            self::release_object($order);
+            throw $error;
         }
     }
 
     public static function guard_item($item, $dataStore = null): void
     {
-        if (!$item || !method_exists($item, 'get_order_id') || (int) $item->get_order_id() < 1) {
+        if (!is_object($item) || !method_exists($item, 'get_order_id') || (int) $item->get_order_id() < 1) {
             return;
         }
-        $purchase = PurchaseRepository::for_order((int) $item->get_order_id());
-        if ($purchase === null || empty($purchase['locked_at'])) {
+        $orderId = (int) $item->get_order_id();
+        if (!self::acquire_for_existing_purchase($orderId, spl_object_id($item))) {
             return;
         }
-        $snapshot = json_decode((string) $purchase['financial_snapshot'], true);
-        if (!is_array($snapshot)) {
-            throw new \RuntimeException('This order has an unreadable locked purchase snapshot.');
-        }
-        $type = method_exists($item, 'get_type') ? (string) $item->get_type() : '';
-        $savedItems = match ($type) {
-            'line_item' => $snapshot['items'] ?? [],
-            'shipping' => $snapshot['shipping'] ?? [],
-            'fee' => $snapshot['fees'] ?? [],
-            'tax' => $snapshot['tax_lines'] ?? [],
-            default => [],
-        };
-        $saved = null;
-        foreach (is_array($savedItems) ? $savedItems : [] as $candidate) {
-            if ((int) ($candidate['item_id'] ?? 0) === (int) $item->get_id() && (int) $item->get_id() > 0) {
-                $saved = $candidate;
-                break;
+        try {
+            $purchase = PurchaseRepository::for_order($orderId);
+            if ($purchase === null || empty($purchase['locked_at'])) {
+                return;
             }
-        }
-        if ($saved === null || !self::same_financial_item(
-            $item,
-            $type,
-            $saved,
-            (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals())
-        )) {
-            throw new \RuntimeException('Order item financial fields are locked after payment begins. Create a replacement order to change them.');
+            $snapshot = json_decode((string) $purchase['financial_snapshot'], true);
+            if (!is_array($snapshot)) {
+                throw new \RuntimeException('This order has an unreadable locked purchase snapshot.');
+            }
+            $type = method_exists($item, 'get_type') ? (string) $item->get_type() : '';
+            $savedItems = match ($type) {
+                'line_item' => $snapshot['items'] ?? [],
+                'shipping' => $snapshot['shipping'] ?? [],
+                'fee' => $snapshot['fees'] ?? [],
+                'tax' => $snapshot['tax_lines'] ?? [],
+                default => [],
+            };
+            $saved = null;
+            foreach (is_array($savedItems) ? $savedItems : [] as $candidate) {
+                if ((int) ($candidate['item_id'] ?? 0) === (int) $item->get_id() && (int) $item->get_id() > 0) {
+                    $saved = $candidate;
+                    break;
+                }
+            }
+            if ($saved === null || !self::same_financial_item(
+                $item,
+                $type,
+                $saved,
+                (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals())
+            )) {
+                throw new \RuntimeException('Order item financial fields are locked after payment begins. Create a replacement order to change them.');
+            }
+        } catch (\Throwable $error) {
+            self::release_object($item);
+            throw $error;
         }
     }
 
@@ -84,9 +108,65 @@ final class OrderMutationGuard
         if ($orderId < 1) {
             return;
         }
+        $objectId = -$itemId;
+        if (!self::acquire_for_existing_purchase($orderId, $objectId)) {
+            return;
+        }
         $purchase = PurchaseRepository::for_order($orderId);
         if ($purchase !== null && !empty($purchase['locked_at'])) {
+            self::release_lock_key($objectId);
             throw new \RuntimeException('Order items are locked after payment begins.');
+        }
+    }
+
+    public static function release_order($order, $dataStore = null): void
+    {
+        if ($order instanceof \WC_Order) {
+            self::release_object($order);
+        }
+    }
+
+    public static function release_item($item, $dataStore = null): void
+    {
+        if (is_object($item)) {
+            self::release_object($item);
+        }
+    }
+
+    public static function release_deleted_item(int $itemId): void
+    {
+        self::release_lock_key(-$itemId);
+    }
+
+    private static function acquire_for_existing_purchase(int $orderId, int $objectId): bool
+    {
+        if (PurchaseRepository::for_order($orderId) === null) {
+            return false;
+        }
+        if (!PurchaseRepository::order_lock($orderId)) {
+            throw new \RuntimeException('Could not lock this order for financial changes. Please retry.');
+        }
+        if (isset(self::$heldLocks[$objectId]) && self::$heldLocks[$objectId]['order_id'] === $orderId) {
+            self::$heldLocks[$objectId]['depth']++;
+        } else {
+            self::$heldLocks[$objectId] = ['order_id' => $orderId, 'depth' => 1];
+        }
+        return true;
+    }
+
+    private static function release_object(object $object): void
+    {
+        self::release_lock_key(spl_object_id($object));
+    }
+
+    private static function release_lock_key(int $key): void
+    {
+        if (!isset(self::$heldLocks[$key])) {
+            return;
+        }
+        PurchaseRepository::release_order_lock(self::$heldLocks[$key]['order_id']);
+        if (--self::$heldLocks[$key]['depth'] < 1) {
+            unset(self::$heldLocks[$key]);
         }
     }
 

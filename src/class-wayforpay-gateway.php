@@ -274,6 +274,11 @@ final class WayForPayGateway extends \WC_Payment_Gateway
             || (string) $attempt['purchase_state'] !== 'awaiting_payment') {
             wp_die(esc_html__('Платіжну спробу не знайдено.', 'wayforpay-multi-seller'), '', ['response' => 404]);
         }
+        $now = current_time('mysql', true);
+        if (empty($attempt['expires_at']) || (string) $attempt['expires_at'] <= $now
+            || empty($attempt['purchase_expires_at']) || (string) $attempt['purchase_expires_at'] <= $now) {
+            wp_die(esc_html__('Строк оплати минув. Створіть нову спробу оплати.', 'wayforpay-multi-seller'), '', ['response' => 410]);
+        }
         nocache_headers();
         header('Referrer-Policy: no-referrer');
         header('Content-Type: text/html; charset=' . get_option('blog_charset'));

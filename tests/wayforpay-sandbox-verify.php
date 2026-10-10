@@ -1,7 +1,5 @@
-No syntax errors detected in tests/wayforpay-sandbox-verify.php
 <?php
 
-use WfpMultiSeller\PurchaseExecutionService;
 use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
@@ -134,7 +132,10 @@ $approvedEventCount = (int) $wpdb->get_var($wpdb->prepare(
 ));
 wfpms_sandbox_verify_assert($approvedEventCount === 1, 'Signed Approved callback evidence was not stored exactly once.');
 
-PurchaseExecutionService::run((int) $purchase['id']);
+$executionArgs = [(int) $purchase['id']];
+$scheduledAt = wp_next_scheduled('wfpms_process_execution', $executionArgs);
+wfpms_sandbox_verify_assert($scheduledAt !== false, 'Accepted callback did not schedule the registered WooCommerce execution hook.');
+\WP_CLI::runcommand('cron event run wfpms_process_execution');
 $order = wc_get_order($orderId);
 $purchase = PurchaseRepository::for_order($orderId);
 wfpms_sandbox_verify_assert($order instanceof WC_Order && $order->is_paid(), 'WooCommerce order did not reach its paid state.');

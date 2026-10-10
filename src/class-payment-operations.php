@@ -179,6 +179,10 @@ final class PaymentOperations
                         self::insert_event((int) $purchase['id'], 0, 0, $kind, [
                             'operation_id' => $operationId,
                             'account' => $recipient,
+                            'submitted_amount' => $rawAmount,
+                            'normalized_amount' => $amount,
+                            'currency' => $currency,
+                            'occurred_at' => $occurredAt,
                             'existing_purchase_id' => (int) $existing['purchase_id'],
                             'existing_receipt_id' => (int) $existing['id'],
                         ], $same ? 'Банківську операцію вже зараховано до іншого замовлення.'

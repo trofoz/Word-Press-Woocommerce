@@ -26,7 +26,7 @@
 | PHP namespace | `WfpMultiSeller` |
 | Префікс таблиць після `$wpdb->prefix` | `wfpms_` |
 | Нові gateway IDs | `wfpms_card`, `wfpms_iban` |
-| Новий callback | `wc-api=wfpms_callback` |
+| Новий callback | `wc-api=wfpms_wayforpay` |
 | Історичний callback | upstream надсилає `wc-api=WC_wayforpay`; WooCommerce hook `wc_wayforpay`, лише явно мігровані замовлення |
 
 Версія нового плагіна починається з `0.1.0-dev`; upstream `1.0` не є її версією.

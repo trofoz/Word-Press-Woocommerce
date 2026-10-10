@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 2871)
+Total output lines: 257
+
 name: WooCommerce integration
 
 on:
@@ -88,86 +91,16 @@ jobs:
           wp option update woocommerce_checkout_page_id "$(cat "$RUNNER_TEMP/checkout-page-id")" --path="$WP_PATH"
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+          for receipt_case in accepted duplicate conflict; do
+            WFPMS_BANK_RECEIPT_CASE="$receipt_case" \
+              wp eval-file "$GITHUB_WORKSPACE/tests/integration-bank-receipt.php" --path="$WP_PATH"
+          done
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
 
   wayforpay-sandbox:
     name: WayForPay sandbox hosted-payment status
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.run_wayforpay_sandbox) ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-wfp-sandbox]'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    services:
-      mariadb:
-        image: mariadb:11.4
-        env:
-          MARIADB_DATABASE: wordpress_test
-          MARIADB_USER: wordpress
-          MARIADB_PASSWORD: wordpress-test-only
-          MARIADB_ROOT_PASSWORD: root-test-only
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-          extensions: curl, dom, exif, fileinfo, gd, intl, mbstring, mysqli, zip
-          coverage: none
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install disposable WordPress and WooCommerce
-        env:
-          WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
-          WP_CLI_ALLOW_ROOT: '1'
-        run: |
-          set -euo pipefail
-          export PATH="$(composer global config bin-dir --absolute):$PATH"
-          composer global require --no-interaction wp-cli/wp-cli-bundle:2.12.0
-          mkdir -p "$WP_PATH"
-          wp core download --path="$WP_PATH" --version=7.0
-          wp config create --path="$WP_PATH" \
-            --dbname=wordpress_test --dbuser=wordpress --dbpass=wordpress-test-only \
-            --dbhost=127.0.0.1 --dbprefix=wfsandbox_ --skip-check
-          wp core install --path="$WP_PATH" --url=http://127.0.0.1:8099 \
-            --title='Disposable WayForPay sandbox' \
-            --admin_user=sandbox-admin --admin_password=sandbox-only-password \
-            --admin_email=sandbox@example.test --skip-email
-          wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
-          ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
-          # Keep this encryption key unique to the disposable runner and out of logs/artifacts.
-          wp config set WFPMS_MASTER_KEY "$(php -r 'echo bin2hex(random_bytes(32));')" --type=constant --path="$WP_PATH" >/dev/null
-          wp config set WFPMS_MASTER_KEY_ID "sandbox-run" --type=constant --path="$WP_PATH" >/dev/null
-          wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
-          cat > "$RUNNER_TEMP/wp-router.php" <<'PHP'
-          <?php
-          if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
-              $_SERVER['HTTPS'] = 'on';
-              $_SERVER['SERVER_PORT'] = '443';
-          }
-          $root = getenv('WFPMS_WP_PATH');
-          $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-          if (is_string($root) && $path !== false && $path !== '/' && is_file($root . $path)) {
-              return false;
-          }
-          require $root . '/index.php';
-          PHP
-          # The runner exposes only the PHP server through a separate allowlisted proxy.
-          WFPMS_WP_PATH="$WP_PATH" php -S 127.0.0.1:8099 -t "$WP_PATH" "$RUNNER_TEMP/wp-router.php" >/dev/null 2>&1 &
-          echo "$!" > "$RUNNER_TEMP/php-server.pid"
-
-      - name: Install Cloudflare Tunnel and start callback-only proxy
-        run: |
-          set -euo pipefail
-          curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloudflare-main.gpg
+      (github.event_name == 'workflow_dispatch' && inputs.run_way…871 tokens truncated…mor --yes -o /usr/share/keyrings/cloudflare-main.gpg
           echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
           sudo apt-get update -qq
           sudo apt-get install -y cloudflared

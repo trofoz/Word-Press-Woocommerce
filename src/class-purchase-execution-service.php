@@ -130,6 +130,14 @@ final class PurchaseExecutionService
     public static function expire_due(): void
     {
         global $wpdb;
+        $pending = $wpdb->get_col($wpdb->prepare(
+            'SELECT id FROM ' . PurchaseRepository::purchases_table()
+            . ' WHERE state IN (%s,%s) AND execution_state=%s ORDER BY updated_at ASC LIMIT 100',
+            'paid', 'free', 'pending'
+        ));
+        foreach (is_array($pending) ? $pending : [] as $pendingId) {
+            self::schedule((int) $pendingId);
+        }
         $stalled = $wpdb->get_col($wpdb->prepare(
             'SELECT id FROM ' . PurchaseRepository::purchases_table()
             . ' WHERE execution_state=%s AND execution_started_at IS NOT NULL AND execution_started_at<=%s LIMIT 100',

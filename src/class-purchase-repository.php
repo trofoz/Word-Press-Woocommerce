@@ -26,7 +26,7 @@ final class PurchaseRepository
     {
         global $wpdb;
         $row = $wpdb->get_row($wpdb->prepare(
-            'SELECT a.*,p.order_id,p.seller_id,p.state AS purchase_state,p.locked_at,p.snapshot_hash '
+            'SELECT a.*,p.order_id,p.seller_id,p.state AS purchase_state,p.expires_at AS purchase_expires_at,p.locked_at,p.snapshot_hash '
             . 'FROM ' . self::attempts_table() . ' a INNER JOIN ' . self::purchases_table()
             . ' p ON p.id=a.purchase_id WHERE a.external_reference=%s',
             $reference

@@ -92,6 +92,29 @@ SellerRepository::replace_category_rules([
     $categories[1] => $sellerIds[1],
 ]);
 
+$now = current_time('mysql', true);
+wfpms_integration_assert($wpdb->insert(SellerRepository::configs_table(), [
+    'seller_id' => $sellerIds[0],
+    'version' => 1,
+    'recipient_name' => 'Integration Seller 1',
+    'tax_id' => 'TEST1',
+    'iban' => 'UA213223130000026007233566001',
+    'bank_name' => 'Integration Bank',
+    'purpose_template' => 'Order {order_number}',
+    'merchant_account' => '',
+    'merchant_domain' => '',
+    'card_enabled' => 0,
+    'iban_enabled' => 1,
+    'secret_ciphertext' => '',
+    'checked_by' => null,
+    'checked_at' => null,
+    'created_at' => $now,
+]) === 1, 'IBAN seller configuration can be inserted');
+$ibanConfigId = (int) $wpdb->insert_id;
+wfpms_integration_assert($wpdb->update(SellerRepository::sellers_table(), [
+    'current_config_id' => $ibanConfigId,
+], ['id' => $sellerIds[0]]) !== false, 'IBAN seller configuration can be activated');
+
 $product = new WC_Product_Simple();
 $product->set_name('Integration product');
 $product->set_status('publish');
@@ -130,6 +153,41 @@ $order->calculate_totals();
 $order->save();
 $reloadedOrder = wc_get_order($order->get_id());
 wfpms_integration_assert($reloadedOrder instanceof WC_Order && $reloadedOrder->get_payment_method() === 'wfpms_iban', 'WooCommerce order persists and reloads via the active order store');
+$bankGateway = new WfpMultiSeller\BankTransferGateway();
+$bankResult = $bankGateway->process_payment($order->get_id());
+wfpms_integration_assert(($bankResult['result'] ?? '') === 'success', 'IBAN gateway finalizes the order and returns a successful checkout result');
+$purchase = WfpMultiSeller\PurchaseRepository::for_order($order->get_id());
+wfpms_integration_assert($purchase !== null && (string) $purchase['state'] === 'awaiting_payment', 'IBAN checkout creates an awaiting-payment purchase');
+$ibanAttempt = WfpMultiSeller\PurchaseRepository::attempts_for_purchase((int) $purchase['id'])[0] ?? null;
+$ibanInstructions = is_array($ibanAttempt) ? json_decode((string) $ibanAttempt['payload'], true) : null;
+wfpms_integration_assert(is_array($ibanInstructions)
+    && $ibanInstructions['recipient_name'] === 'Integration Seller 1'
+    && $ibanInstructions['iban'] === 'UA213223130000026007233566001'
+    && $ibanInstructions['bank_name'] === 'Integration Bank'
+    && $ibanInstructions['amount'] === (string) $purchase['amount']
+    && $ibanInstructions['currency'] === (string) $purchase['currency'], 'IBAN attempt stores the seller-specific payment instructions and amount');
+
+wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
+update_option('wfpms_integration_iban_order_id', (int) $order->get_id(), false);
+update_option('wfpms_integration_iban_expires_at', (string) $purchase['expires_at'], false);
+$wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
+    'state' => 'paid',
+    'execution_state' => 'pending',
+    'updated_at' => current_time('mysql', true),
+], ['id' => (int) $purchase['id']]);
+$rejectSchedule = static fn($pre, $event, $wpError) => false;
+add_filter('pre_schedule_event', $rejectSchedule, 10, 3);
+WfpMultiSeller\PurchaseExecutionService::schedule((int) $purchase['id']);
+remove_filter('pre_schedule_event', $rejectSchedule, 10);
+wfpms_integration_assert(!wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'failed one-off execution scheduling leaves no event');
+WfpMultiSeller\PurchaseExecutionService::expire_due();
+wfpms_integration_assert(wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'hourly recovery schedules paid purchases whose execution remained pending');
+wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
+$wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
+    'state' => 'awaiting_payment',
+    'execution_state' => 'none',
+    'updated_at' => current_time('mysql', true),
+], ['id' => (int) $purchase['id']]);
 
 $checkoutId = (int) get_option('woocommerce_checkout_page_id');
 $checkout = get_post($checkoutId);
