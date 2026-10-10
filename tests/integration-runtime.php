@@ -142,6 +142,7 @@ $manualProduct->set_status('publish');
 $manualProduct->set_regular_price('15.00');
 $manualProduct->save();
 update_post_meta($manualProduct->get_id(), ProductRouting::META_SELLER_ID, $sellerIds[2]);
+update_option('wfpms_integration_manual_product_id', $manualProduct->get_id(), false);
 $resolvedManual = ProductRouting::resolve($manualProduct->get_id());
 wfpms_integration_assert($resolvedManual['ok'] && $resolvedManual['seller_id'] === $sellerIds[2] && $resolvedManual['source'] === 'manual', 'manual product assignment overrides category routing');
 
