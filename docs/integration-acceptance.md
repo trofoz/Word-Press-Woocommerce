@@ -28,7 +28,7 @@ Workflow має ручний параметр `run_wayforpay_sandbox`. Для о
 
 Офіційні тестові реквізити merchant завантажуються в runner без запису в репозиторій або GitHub secrets ([WayForPay sandbox docs](https://wiki.wayforpay.com/view/852472)). Публічний тестовий режим картки описано в інструкції Weblium: тестові картки можуть лишати операцію незавершеною або відхиленою; успішна оплата в описаній інструкції потребує реальної картки й коштів ([Weblium test mode](https://help.weblium.com/uk/article/pidklyuchennya-wayforpay-u-yakosti-platizhnoyi-sistemi-14ymjfz/)). WayForPay визначає `InProcessing` як незавершену операцію, для якої треба повторити `CHECK_STATUS` ([WayForPay response codes](https://wiki.wayforpay.com/en/view/852131)). Тому статус `InProcessing` проходить лише перевірку безпечного очікування, а не успішну оплату. Позитивний callback/fulfillment сценарій залишається неперевіреним; його можна провести лише окремим погодженим способом без реального списання.
 
-Фактичний sandbox результат і посилання на Actions run додаються після успішної перевірки підписаного `CHECK_STATUS` та незміненого неоплаченого замовлення.
+Фактичний результат: **PASS, 5/5 jobs**, [Actions run 38074053083](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38074053083), commit `9db582b`. WayForPay повернув підписаний `InProcessing` / reason code `1131`. Тест підтвердив, що замовлення залишилося `awaiting_payment`, не було оплачено, не мало прийнятої квитанції, а `execution_state` лишився `none`. Це приймає безпечний pending стан; позитивний callback/fulfillment шлях цим sandbox запуском не перевірений.
 
 ## Потрібен окремий тестовий магазин
 
