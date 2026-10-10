@@ -69,7 +69,13 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
             && (string) ($evidence['occurred_at'] ?? '') === $storedOccurredAt;
     }
     if (!$ok) {
-        fwrite(STDERR, 'FAIL: IBAN receipt case did not produce its expected durable state: ' . $scenario . "\n");
+        $diagnostic = [
+            'state' => $fresh['state'] ?? null,
+            'expected_occurred_at' => $storedOccurredAt,
+            'event_evidence' => $evidence ?? null,
+        ];
+        fwrite(STDERR, 'FAIL: IBAN receipt case did not produce its expected durable state: '
+            . $scenario . ' ' . wp_json_encode($diagnostic, JSON_UNESCAPED_SLASHES) . "\n");
         exit(1);
     }
     fwrite(STDOUT, 'PASS: IBAN receipt case ' . $scenario . "\n");
