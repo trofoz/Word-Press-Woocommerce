@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Open real order-pay URLs with saved order keys; never submit payment."""
 
+import html
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 import http.cookiejar
@@ -53,9 +55,20 @@ for checkout_kind in ("classic_order_id", "blocks_order_id"):
         for marker in markers:
             start = body.lower().find(marker.lower())
             excerpts[marker] = body[max(0, start - 200):start + 500] if start >= 0 else "<missing>"
+        visible_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", body)))
+        state_markers = [
+            "Please log in to your account below",
+            "This order cannot be paid for",
+            "Sorry, this order is invalid",
+            "There are no available payment methods",
+            "Your cart is currently empty",
+        ]
+        forms = re.findall(r"<form\b[^>]*>", body, re.I)
         raise RuntimeError(
             f"Order-pay page for {order_id} does not show the frozen legal recipient; "
-            f"final URL={response.geturl()}; markers={excerpts!r}"
+            f"final URL={response.geturl()}; markers={excerpts!r}; "
+            f"states={{{', '.join(repr(marker)+': '+str(marker.lower() in visible_text.lower()) for marker in state_markers)}}}; "
+            f"forms={forms!r}; visible_text={visible_text[:500]!r}"
         )
     if "payment_method_wfpms_iban" not in body:
         raise RuntimeError(f"Order-pay page for {order_id} does not show the saved IBAN method.")
