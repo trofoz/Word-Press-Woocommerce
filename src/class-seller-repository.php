@@ -78,7 +78,10 @@ final class SellerRepository
         }
 
         try {
-            $existing = $sellerId === null ? null : self::find($sellerId);
+            $existing = $sellerId === null
+                ? null
+                : $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . $sellers . ' WHERE id=%d FOR UPDATE', $sellerId), ARRAY_A);
+            $existing = is_array($existing) ? $existing : null;
             if ($sellerId !== null && $existing === null) {
                 throw new \RuntimeException('Seller not found.');
             }

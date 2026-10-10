@@ -30,6 +30,9 @@ require_once WFPMS_DIR . 'src/class-product-routing.php';
 require_once WFPMS_DIR . 'src/class-product-editor.php';
 require_once WFPMS_DIR . 'src/class-admin.php';
 require_once WFPMS_DIR . 'src/class-installer.php';
+require_once WFPMS_DIR . 'src/class-purchase-repository.php';
+require_once WFPMS_DIR . 'src/class-order-purchase-service.php';
+require_once WFPMS_DIR . 'src/class-order-mutation-guard.php';
 
 register_activation_hook(WFPMS_FILE, [Installer::class, 'activate']);
 add_action('plugins_loaded', static function (): void {
@@ -47,4 +50,9 @@ add_action('plugins_loaded', static function (): void {
     Installer::maybe_upgrade();
     ProductEditor::boot();
     Admin::boot();
+    OrderMutationGuard::boot();
+    OrderPurchaseService::boot();
+    require_once WFPMS_DIR . 'src/class-wayforpay-gateway.php';
+    WayForPayGateway::boot();
+    add_filter('woocommerce_payment_gateways', [WayForPayGateway::class, 'register']);
 }, 20);

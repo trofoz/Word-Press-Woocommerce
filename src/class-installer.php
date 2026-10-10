@@ -5,7 +5,7 @@ namespace WfpMultiSeller;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = 1;
+    public const SCHEMA_VERSION = 2;
 
     public static function activate(): void
     {
@@ -30,6 +30,10 @@ final class Installer
         $sellers = SellerRepository::sellers_table();
         $configs = SellerRepository::configs_table();
         $rules = SellerRepository::category_rules_table();
+        $purchases = PurchaseRepository::purchases_table();
+        $attempts = PurchaseRepository::attempts_table();
+        $receipts = PurchaseRepository::receipts_table();
+        $events = PurchaseRepository::events_table();
 
         dbDelta("CREATE TABLE {$sellers} (
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -77,7 +81,78 @@ final class Installer
             KEY seller_id (seller_id)
         ) ENGINE=InnoDB {$collation};");
 
-        foreach ([$sellers, $configs, $rules] as $table) {
+        dbDelta("CREATE TABLE {$purchases} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            order_id bigint(20) unsigned NOT NULL,
+            seller_id bigint(20) unsigned NOT NULL,
+            config_id bigint(20) unsigned NOT NULL,
+            financial_snapshot longtext NOT NULL,
+            snapshot_hash char(64) NOT NULL,
+            amount decimal(20,6) NOT NULL,
+            currency char(3) NOT NULL,
+            state varchar(32) NOT NULL DEFAULT 'ready',
+            locked_at datetime DEFAULT NULL,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY order_id (order_id),
+            KEY seller_state (seller_id,state)
+        ) ENGINE=InnoDB {$collation};");
+
+        dbDelta("CREATE TABLE {$attempts} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            purchase_id bigint(20) unsigned NOT NULL,
+            channel varchar(16) NOT NULL,
+            merchant_account varchar(191) NOT NULL,
+            external_reference varchar(191) NOT NULL,
+            config_id bigint(20) unsigned NOT NULL,
+            credential_key_id varchar(32) NOT NULL DEFAULT '',
+            expected_amount decimal(20,6) NOT NULL,
+            amount_scale tinyint(3) unsigned NOT NULL DEFAULT 2,
+            currency char(3) NOT NULL,
+            payload longtext NOT NULL,
+            status varchar(32) NOT NULL DEFAULT 'issued',
+            issued_at datetime NOT NULL,
+            expires_at datetime DEFAULT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY external_reference (external_reference),
+            KEY purchase_status (purchase_id,status)
+        ) ENGINE=InnoDB {$collation};");
+
+        dbDelta("CREATE TABLE {$receipts} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            purchase_id bigint(20) unsigned NOT NULL,
+            attempt_id bigint(20) unsigned NOT NULL,
+            source varchar(16) NOT NULL,
+            source_scope varchar(191) NOT NULL,
+            external_id varchar(191) NOT NULL,
+            amount decimal(20,6) NOT NULL,
+            amount_raw varchar(191) NOT NULL,
+            currency char(3) NOT NULL,
+            transaction_status varchar(64) NOT NULL,
+            classification varchar(32) NOT NULL,
+            first_event_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            recorded_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY source_identity (source,source_scope,external_id),
+            KEY purchase_classification (purchase_id,classification)
+        ) ENGINE=InnoDB {$collation};");
+
+        dbDelta("CREATE TABLE {$events} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            purchase_id bigint(20) unsigned NOT NULL,
+            attempt_id bigint(20) unsigned NOT NULL,
+            receipt_id bigint(20) unsigned NOT NULL DEFAULT 0,
+            dedupe_key char(64) NOT NULL,
+            kind varchar(32) NOT NULL,
+            evidence longtext NOT NULL,
+            received_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY dedupe_key (dedupe_key),
+            KEY purchase_kind (purchase_id,kind)
+        ) ENGINE=InnoDB {$collation};");
+
+        foreach ([$sellers, $configs, $rules, $purchases, $attempts, $receipts, $events] as $table) {
             $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
             if ($found !== $table) {
                 return;
