@@ -1,3 +1,4 @@
+No syntax errors detected in tests/wayforpay-sandbox-verify.php
 <?php
 
 use WfpMultiSeller\PurchaseExecutionService;
@@ -93,6 +94,10 @@ echo 'SAFE_STATUS_DIAGNOSTIC http=' . $lastStatusHttpCode
 if (in_array($providerStatus, ['Declined', 'InProcessing'], true)) {
     $purchase = PurchaseRepository::for_order($orderId);
     $order = wc_get_order($orderId);
+    echo 'SAFE_ORDER_DIAGNOSTIC paid=' . (int) ($order instanceof WC_Order && $order->is_paid())
+        . ' purchaseState=' . preg_replace('/[^A-Za-z_-]/', '', (string) ($purchase['state'] ?? 'missing'))
+        . ' executionState=' . preg_replace('/[^A-Za-z_-]/', '', (string) ($purchase['execution_state'] ?? 'missing'))
+        . ' acceptedReceipt=' . (int) ($purchase['accepted_receipt_id'] ?? 0) . "\n";
     wfpms_sandbox_verify_assert($order instanceof WC_Order && !$order->is_paid(), 'Unconfirmed sandbox payment must not mark the WooCommerce order paid.');
     wfpms_sandbox_verify_assert($purchase !== null
         && (string) $purchase['state'] !== 'paid'
