@@ -8,10 +8,10 @@ final class OrderPurchaseService
 {
     public static function boot(): void
     {
+        add_action('wp', [self::class, 'prepare_order_pay_checkout'], 1, 1);
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
-        add_filter('the_content', [self::class, 'render_order_pay_checkout'], 8);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
@@ -190,29 +190,31 @@ final class OrderPurchaseService
     }
 
     /** Route valid payment links through WooCommerce's order-pay shortcode on any checkout page. */
-    public static function render_order_pay_checkout(string $content): string
+    public static function prepare_order_pay_checkout($wp = null): void
     {
-        if (!function_exists('wc_get_page_id') || !function_exists('is_page')
-            || !is_page(wc_get_page_id('checkout'))
+        global $wp_query;
+        if (!function_exists('wc_get_page_id') || !is_object($wp_query)
+            || absint($wp_query->get('page_id')) !== absint(wc_get_page_id('checkout'))
             || !isset($_GET['order-pay'], $_GET['pay_for_order'], $_GET['key'])
             || !is_scalar($_GET['order-pay']) || !is_scalar($_GET['pay_for_order']) || !is_scalar($_GET['key'])
             || (string) wp_unslash((string) $_GET['pay_for_order']) !== 'true') {
-            return $content;
+            return;
         }
         $orderId = absint(wp_unslash((string) $_GET['order-pay']));
         $order = $orderId > 0 ? wc_get_order($orderId) : false;
         $key = wc_clean(wp_unslash((string) $_GET['key']));
         if (!$order instanceof \WC_Order || !hash_equals($order->get_order_key(), $key)) {
-            return $content;
+            return;
         }
-        global $wp, $wp_query;
         if (is_object($wp)) {
             $wp->query_vars['order-pay'] = $orderId;
         }
-        if (is_object($wp_query)) {
-            $wp_query->query_vars['order-pay'] = $orderId;
+        $wp_query->query_vars['order-pay'] = $orderId;
+        foreach ($wp_query->posts as $post) {
+            if ($post instanceof \WP_Post) {
+                $post->post_content = '[woocommerce_checkout]';
+            }
         }
-        return do_shortcode('[woocommerce_checkout]');
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string
