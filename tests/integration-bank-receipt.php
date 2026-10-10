@@ -82,4 +82,3 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
 });
 
 PaymentOperations::confirm_bank_receipt();
-No syntax errors detected in tests/integration-bank-receipt.php
