@@ -57,6 +57,13 @@ def call(client, path, method="GET", headers=None, data=None):
         return error.code, error.headers, error.read()
 
 
+def store_api_path(route, query=None):
+    params = {"rest_route": "/wc/store/v1/" + route.lstrip("/")}
+    if query:
+        params.update(query)
+    return "/?" + urllib.parse.urlencode(params)
+
+
 def add_classic_item(client):
     query = urllib.parse.urlencode({"add-to-cart": PRODUCT_ID})
     status, _, body = call(client, "/?" + query)
@@ -118,16 +125,15 @@ if not classic_id_match:
     raise RuntimeError(f"Classic checkout redirect did not contain an order ID: {classic_result.get('redirect')!r}")
 
 blocks = new_client()
-cart_status, cart_headers, cart_body = call(blocks, "/wp-json/wc/store/v1/cart")
+cart_status, cart_headers, cart_body = call(blocks, store_api_path("cart"))
 if cart_status != 200:
     raise RuntimeError(f"Store API cart initialization failed: HTTP {cart_status}: {cart_body[:700]!r}")
 nonce = cart_headers.get("Nonce")
 if not nonce:
     raise RuntimeError("Store API did not return the cart nonce.")
-query = urllib.parse.urlencode({"id": PRODUCT_ID, "quantity": 1})
 add_status, add_headers, add_body = call(
     blocks,
-    "/wp-json/wc/store/v1/cart/add-item?" + query,
+    store_api_path("cart/add-item", {"id": PRODUCT_ID, "quantity": 1}),
     method="POST",
     headers={"Nonce": nonce},
     data={},
@@ -137,7 +143,7 @@ if add_status != 200:
 nonce = add_headers.get("Nonce", nonce)
 blocks_status, blocks_headers, blocks_body = call(
     blocks,
-    "/wp-json/wc/store/v1/checkout",
+    store_api_path("checkout"),
     method="POST",
     headers={"Nonce": nonce},
     data={

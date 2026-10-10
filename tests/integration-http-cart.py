@@ -10,6 +10,7 @@ import urllib.request
 
 
 BASE_URL = os.environ.get("WFPMS_BASE_URL", "http://127.0.0.1:8099").rstrip("/")
+STORE_API_ROOT = "/?" + urllib.parse.urlencode({"rest_route": "/wc/store/v1"})
 SAME_SELLER_IDS = [
     int(os.environ["WFPMS_PRODUCT_SELLER_ONE"]),
     int(os.environ["WFPMS_PRODUCT_SELLER_ONE_SECOND"]),
@@ -39,10 +40,15 @@ def request(client, path, method="GET", headers=None, body=None):
 
 
 def cart(client):
-    status, headers, body = request(client, "/wp-json/wc/store/v1/cart")
+    status, headers, body = request(client, STORE_API_ROOT + "/cart")
     if status != 200:
         raise RuntimeError(f"Store API cart GET returned HTTP {status}: {body[:500]!r}")
-    return json.loads(body), headers
+    try:
+        return json.loads(body), headers
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"Store API cart GET did not return JSON (content-type={headers.get('Content-Type')}): {body[:500]!r}"
+        ) from error
 
 
 def assert_cart(cart_data, expected_ids, label):
@@ -81,7 +87,7 @@ def store_api_add(product_id):
     query = urllib.parse.urlencode({"id": product_id, "quantity": 1})
     status, response_headers, body = request(
         store_api,
-        "/wp-json/wc/store/v1/cart/add-item?" + query,
+        STORE_API_ROOT + "/cart/add-item&" + query,
         method="POST",
         headers={"Nonce": nonce, "Content-Type": "application/json"},
         body={},
