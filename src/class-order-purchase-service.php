@@ -10,6 +10,7 @@ final class OrderPurchaseService
     {
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
+        add_action('woocommerce_pay_order_before_submit', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
@@ -156,14 +157,6 @@ final class OrderPurchaseService
     /** Full legal recipient shown alongside each available seller payment method. */
     public static function checkout_seller_name(): string
     {
-        if (function_exists('WC') && WC()->cart && !WC()->cart->is_empty()) {
-            $resolution = self::seller_for_cart();
-            if ($resolution['ok'] && is_int($resolution['seller_id'])) {
-                $config = SellerRepository::current_config($resolution['seller_id']);
-                return $config === null ? '' : (string) $config['recipient_name'];
-            }
-            return '';
-        }
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));
             $order = $orderId > 0 ? wc_get_order($orderId) : false;
@@ -173,6 +166,14 @@ final class OrderPurchaseService
                     return (string) $snapshot['legal_name'];
                 }
             }
+        }
+        if (function_exists('WC') && WC()->cart && !WC()->cart->is_empty()) {
+            $resolution = self::seller_for_cart();
+            if ($resolution['ok'] && is_int($resolution['seller_id'])) {
+                $config = SellerRepository::current_config($resolution['seller_id']);
+                return $config === null ? '' : (string) $config['recipient_name'];
+            }
+            return '';
         }
         return '';
     }
