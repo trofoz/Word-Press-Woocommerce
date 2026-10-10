@@ -75,6 +75,20 @@ jobs:
           wp plugin install woocommerce --path="$WP_PATH" --version=11.1.0 --activate
           ln -s "$GITHUB_WORKSPACE" "$WP_PATH/wp-content/plugins/wayforpay-multi-seller"
           wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
+          UPSTREAM_PATH="$RUNNER_TEMP/wayforpay-upstream"
+          git init "$UPSTREAM_PATH"
+          git -C "$UPSTREAM_PATH" remote add origin https://github.com/wayforpay/Word-Press-Woocommerce.git
+          git -C "$UPSTREAM_PATH" fetch --depth=1 origin b33c8bcb725cf02f8a546273596071024fa4a7ba
+          git -C "$UPSTREAM_PATH" checkout --detach FETCH_HEAD
+          ln -s "$UPSTREAM_PATH" "$WP_PATH/wp-content/plugins/wayforpay-upstream"
+          wp plugin activate wayforpay-upstream --path="$WP_PATH"
+          UPSTREAM_PATH="$RUNNER_TEMP/wayforpay-upstream"
+          git init "$UPSTREAM_PATH"
+          git -C "$UPSTREAM_PATH" remote add origin https://github.com/wayforpay/Word-Press-Woocommerce.git
+          git -C "$UPSTREAM_PATH" fetch --depth=1 origin b33c8bcb725cf02f8a546273596071024fa4a7ba
+          git -C "$UPSTREAM_PATH" checkout --detach FETCH_HEAD
+          ln -s "$UPSTREAM_PATH" "$WP_PATH/wp-content/plugins/wayforpay-upstream"
+          wp plugin activate wayforpay-upstream --path="$WP_PATH"
           if [[ '${{ matrix.hpos }}' == 1 ]]; then
             wp wc hpos enable --with-sync --path="$WP_PATH"
           fi
@@ -96,7 +110,13 @@ jobs:
           curl --fail --silent http://127.0.0.1:8099/ >/dev/null || { cat "$RUNNER_TEMP/wp-server.log"; exit 1; }
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-cart.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-migration.php" --path="$WP_PATH"
+          callback_status="$(curl --silent --output "$RUNNER_TEMP/legacy-callback-body" --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' --data '{}' \
+            'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"
+          [[ "$callback_status" == 400 ]] || { echo "Legacy callback ownership check returned HTTP $callback_status"; exit 1; }
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-order-pay.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-wayforpay-callback.php" --path="$WP_PATH"
           for receipt_case in accepted duplicate conflict; do
             WFPMS_BANK_RECEIPT_CASE="$receipt_case" \
