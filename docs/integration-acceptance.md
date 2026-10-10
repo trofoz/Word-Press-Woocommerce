@@ -18,7 +18,7 @@
 
 Додано workflow `.github/workflows/woo-integration.yml` з окремою MariaDB для кожної комбінації Classic/Blocks і HPOS вимкнено/увімкнено. На справжньому WordPress 7.0 та WooCommerce 11.1.0 він перевіряє активацію плагіна, створення таблиць, обидва шлюзи, Blocks registration, три профілі продавців, ручну й категорійну маршрутизацію товарів, варіацію та зчитування замовлення через активний WooCommerce order store.
 
-Workflow пушиться разом із гілкою `test/stages-1-8-integration` і запускається GitHub Actions. До зеленого завершення всіх чотирьох jobs результати runtime залишаються **неперевіреними**. Цей набір не виконує зовнішній платіж у WayForPay sandbox та не замінює фінансові, callback concurrency, історичні міграції або всі 65 критеріїв PRD.
+Результат: **PASS, 4/4 jobs**, запуск [38062863591](https://github.com/trofoz/Word-Press-Woocommerce/actions/runs/38062863591) на commit `01b3aec`. Цей набір не виконує зовнішній платіж у WayForPay sandbox та не замінює фінансові, callback concurrency, історичні міграції або всі 65 критеріїв PRD.
 
 ## Потрібен окремий тестовий магазин
 
@@ -55,4 +55,4 @@ Workflow пушиться разом із гілкою `test/stages-1-8-integrat
 
 Поточний контейнер не має `wp`, Docker/Podman, MySQL-сервера або PHP MySQL-драйвера; локальні порти 80, 8080, 3306 і 3307 закриті. Тому runtime запуск виконується окремим workflow на тимчасовій GitHub-hosted VM з disposable DB. Harness у батьківському репозиторії лишається окремим і тестує інший плагін.
 
-Репозиторій `trofoz/Word-Press-Woocommerce` і гілка `test/stages-1-8-integration` створені; CLI авторизований, workflow додано до гілки. Потрібно підтвердити завершення чотирьох jobs у GitHub Actions. Повний WayForPay sandbox платіж лишається окремим gate: він потребує безпечного зберігання merchant credential та публічно доступного тестового callback endpoint. Не записувати секрети в репозиторій, логи, artifacts чи чат. Спільні тестові реквізити WayForPay описані на [офіційній сторінці sandbox](https://wiki.wayforpay.com/view/852472).
+Репозиторій `trofoz/Word-Press-Woocommerce` і гілка `test/stages-1-8-integration` створені; CLI авторизований, workflow додано до гілки, чотири runtime jobs пройшли. Повний WayForPay sandbox платіж лишається окремим gate: він потребує безпечного зберігання merchant credential та публічно доступного тестового callback endpoint. Не записувати секрети в репозиторій, логи, artifacts чи чат. Спільні тестові реквізити WayForPay описані на [офіційній сторінці sandbox](https://wiki.wayforpay.com/view/852472).
