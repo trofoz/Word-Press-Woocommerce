@@ -1,4 +1,3 @@
-PASS: workflow YAML parses
 name: WooCommerce integration
 
 on:
