@@ -95,6 +95,9 @@ jobs:
               --post_content='[woocommerce_checkout]' --porcelain > "$RUNNER_TEMP/checkout-page-id"
           fi
           wp option update woocommerce_checkout_page_id "$(cat "$RUNNER_TEMP/checkout-page-id")" --path="$WP_PATH"
+          wp post create --path="$WP_PATH" --post_type=page --post_title='Classic checkout integration' \
+            --post_name=classic-checkout-test --post_status=publish \
+            --post_content='[woocommerce_checkout]' --porcelain > "$RUNNER_TEMP/classic-checkout-page-id"
           wp server --host=127.0.0.1 --port=8099 --path="$WP_PATH" > "$RUNNER_TEMP/wp-server.log" 2>&1 &
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:8099/ >/dev/null; then break; fi
@@ -103,6 +106,11 @@ jobs:
           curl --fail --silent http://127.0.0.1:8099/ >/dev/null || { cat "$RUNNER_TEMP/wp-server.log"; exit 1; }
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+          WFPMS_BASE_URL=http://127.0.0.1:8099 \
+          WFPMS_PRODUCT_SELLER_ONE="$(wp option get wfpms_integration_iban_product_id --path="$WP_PATH")" \
+          WFPMS_PRODUCT_SELLER_ONE_SECOND="$(wp option get wfpms_integration_same_seller_product_2_id --path="$WP_PATH")" \
+          WFPMS_PRODUCT_SELLER_TWO="$(wp option get wfpms_integration_manual_product_id --path="$WP_PATH")" \
+            python3 "$GITHUB_WORKSPACE/tests/integration-http-cart.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-cart.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-migration.php" --path="$WP_PATH"
           callback_status="$(curl --silent --output "$RUNNER_TEMP/legacy-callback-body" --write-out '%{http_code}' \
@@ -110,6 +118,20 @@ jobs:
             'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"
           [[ "$callback_status" == 400 ]] || { echo "Legacy callback ownership check returned HTTP $callback_status"; exit 1; }
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-order-pay.php" --path="$WP_PATH"
+          WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' wp eval-file \
+            "$GITHUB_WORKSPACE/tests/integration-admin-fixtures.php" --path="$WP_PATH"
+          WFPMS_BASE_URL=http://127.0.0.1:8099 \
+          WFPMS_ADMIN_USER=test-admin \
+          WFPMS_ADMIN_PASSWORD=test-only-admin-password \
+          WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' \
+          WFPMS_SELLER_ONE_ID="$(wp option get wfpms_integration_seller_one_id --path="$WP_PATH")" \
+          WFPMS_SELLER_TWO_ID="$(wp option get wfpms_integration_seller_two_id --path="$WP_PATH")" \
+          WFPMS_ORDER_SELLER_ONE="$(wp option get wfpms_integration_admin_order_seller_1 --path="$WP_PATH")" \
+          WFPMS_ORDER_SELLER_TWO="$(wp option get wfpms_integration_admin_order_seller_2 --path="$WP_PATH")" \
+          WFPMS_UNASSIGNED_PRODUCT="$(wp option get wfpms_integration_unassigned_product_id --path="$WP_PATH")" \
+          WFPMS_CONFLICTED_PRODUCT="$(wp option get wfpms_integration_conflicted_product_id --path="$WP_PATH")" \
+          WFPMS_PRODUCT_SELLER_ONE="$(wp option get wfpms_integration_iban_product_id --path="$WP_PATH")" \
+            python3 "$GITHUB_WORKSPACE/tests/integration-http-admin.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-wayforpay-callback.php" --path="$WP_PATH"
           for receipt_case in accepted duplicate conflict; do
             WFPMS_BANK_RECEIPT_CASE="$receipt_case" \
@@ -117,6 +139,24 @@ jobs:
           done
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-schema-upgrade.php" --path="$WP_PATH"
+          WFPMS_BASE_URL=http://127.0.0.1:8099 \
+          WFPMS_PRODUCT_ID="$(wp option get wfpms_integration_iban_product_id --path="$WP_PATH")" \
+          WFPMS_CLASSIC_CHECKOUT_PATH="/?page_id=$(cat "$RUNNER_TEMP/classic-checkout-page-id")" \
+          WFPMS_HTTP_ORDER_IDS_PATH="$RUNNER_TEMP/http-checkout-order-ids.json" \
+            python3 "$GITHUB_WORKSPACE/tests/integration-http-checkout.py"
+          WFPMS_HTTP_ORDER_IDS_PATH="$RUNNER_TEMP/http-checkout-order-ids.json" \
+          WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-http-checkout-assert.php" --path="$WP_PATH"
+          WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
+            python3 "$GITHUB_WORKSPACE/tests/integration-http-order-pay.py"
+          wp plugin deactivate wayforpay-multi-seller wayforpay-upstream --path="$WP_PATH"
+          wp plugin activate wayforpay-upstream --path="$WP_PATH"
+          wp plugin activate wayforpay-multi-seller --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-plugin-order.php" --path="$WP_PATH"
+          callback_status="$(curl --silent --output "$RUNNER_TEMP/reversed-legacy-callback-body" --write-out '%{http_code}' \
+            --request POST --header 'Content-Type: application/json' --data '{}' \
+            'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"
+          [[ "$callback_status" == 400 ]] || { echo "Reverse-order legacy callback ownership check returned HTTP $callback_status"; exit 1; }
 
   wayforpay-sandbox:
     name: WayForPay sandbox hosted-payment status
