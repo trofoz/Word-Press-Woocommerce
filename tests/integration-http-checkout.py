@@ -121,8 +121,13 @@ if classic_result.get("result") != "success":
     raise RuntimeError(f"Classic checkout failed: {classic_response[:1500]!r}")
 classic_redirect = urllib.parse.urlparse(classic_result.get("redirect", ""))
 classic_id_match = re.search(r"/order-received/(\d+)", classic_redirect.path)
-if not classic_id_match:
-    raise RuntimeError(f"Classic checkout redirect did not contain an order ID: {classic_result.get('redirect')!r}")
+if classic_id_match:
+    classic_order_id = int(classic_id_match.group(1))
+else:
+    received_id = urllib.parse.parse_qs(classic_redirect.query).get("order-received", [""])[0]
+    if not re.fullmatch(r"\d+", received_id):
+        raise RuntimeError(f"Classic checkout redirect did not contain an order ID: {classic_result.get('redirect')!r}")
+    classic_order_id = int(received_id)
 
 blocks = new_client()
 cart_status, cart_headers, cart_body = call(blocks, store_api_path("cart"))
@@ -168,7 +173,7 @@ if blocks_order_id < 1:
 with open(OUTPUT_PATH, "w", encoding="utf-8") as output:
     json.dump(
         {
-            "classic_order_id": int(classic_id_match.group(1)),
+            "classic_order_id": classic_order_id,
             "blocks_order_id": blocks_order_id,
         },
         output,
