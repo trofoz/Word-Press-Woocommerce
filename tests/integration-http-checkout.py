@@ -35,8 +35,11 @@ def new_client():
     )
 
 
-def call(client, path, method="GET", headers=None, data=None):
-    if isinstance(data, dict):
+def call(client, path, method="GET", headers=None, data=None, json_body=False):
+    if isinstance(data, dict) and json_body:
+        data = json.dumps(data).encode()
+        default_headers = {"Content-Type": "application/json"}
+    elif isinstance(data, dict):
         data = urllib.parse.urlencode(data).encode()
         default_headers = {"Content-Type": "application/x-www-form-urlencoded"}
     elif data is not None:
@@ -142,6 +145,7 @@ add_status, add_headers, add_body = call(
     method="POST",
     headers={"Nonce": nonce},
     data={},
+    json_body=True,
 )
 if add_status not in (200, 201):
     raise RuntimeError(f"Store API product add failed: HTTP {add_status}: {add_body[:1000]!r}")
@@ -158,6 +162,7 @@ blocks_status, blocks_headers, blocks_body = call(
         "customer_note": "",
         "create_account": False,
     },
+    json_body=True,
 )
 if blocks_status != 200:
     raise RuntimeError(f"Store API checkout returned HTTP {blocks_status}: {blocks_body[:1500]!r}")
