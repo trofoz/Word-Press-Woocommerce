@@ -65,7 +65,7 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
             && is_array($evidence)
             && (string) ($evidence['submitted_amount'] ?? '') === $submittedAmount
             && (string) ($evidence['normalized_amount'] ?? '') === '9999.99'
-            && (string) ($evidence['currency'] ?? '') === 'UAH'
+            && (string) ($evidence['currency'] ?? '') === (string) $purchase['currency']
             && (string) ($evidence['occurred_at'] ?? '') === $storedOccurredAt;
     }
     if (!$ok) {
@@ -82,3 +82,4 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
 });
 
 PaymentOperations::confirm_bank_receipt();
+No syntax errors detected in tests/integration-bank-receipt.php
