@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-10-10",
+  "upstream_url": "https://github.com/wayforpay/Word-Press-Woocommerce.git",
+  "upstream_commit": "b33c8bcb725cf02f8a546273596071024fa4a7ba",
+  "prd_sha256": "61b166da2f41db900703953e3cb7b275bb392744722e7254a28cca91f464c81e",
+  "club_repository_head": "d454800dcceee7ff6c2eb584a70c80e4b55832f6",
+  "note": "Working-tree bytes; HEAD alone does not identify uncommitted source changes. Tests were not run.",
+  "source_sha256": {
+    "src/class-mm-seller-router.php": "c0d9022aa4341e7fae9d9e596e06e2554894352c8517ef40f4608f4fc73f10b5",
+    "src/class-mm-cart-policy.php": "89cf376f79407dfdb935566b1598bc44607989a6ccf5cee17b31d1850189351c",
+    "src/class-mm-order-snapshot.php": "df297c06b1cea50ca642205cddf273fa86047aa4100353459fad8ba95df0f8c0",
+    "src/class-mm-payment-attempts.php": "6b2396243f0cc5a5a584749c2abe36011654ad7becbbdcdc9440ca7e75c818c2",
+    "src/class-mm-wayforpay-gateway.php": "1226a154263c5a48658f3f66df29bc15ac6de5e0f7121f30a5999b602657ed4f",
+    "src/class-mm-iban-confirmation.php": "c257e7c6626c0bc38494bab00f48dd773fb93a011572acb2994ea0880073c9eb",
+    "src/class-mm-payment-deadline-policy.php": "7244286e006bb576294f53ab3685f36bc4ac58faaf67ca65b64aca4a1c9731bb",
+    "src/class-mm-operator-actions.php": "a4aebd3b225bdd8c47895f19abdbdc6418bebc392088a631e32bcbeef6cab371",
+    "src/class-mm-refund-revocations.php": "3455757439c280906e01e3f9a5f6ca6e4faaea24c3cca28171168fa905ad66fc",
+    "README.md": "27343cd1ccdf2b412f716da5e7f53f853d07c80eeac7eaeffdff98e3d655376f"
+  },
+  "upstream_php_sha256": "86e6acd3708e9380071201bdfef81f278491682a33fe177198d69039457dbc3f"
+}
