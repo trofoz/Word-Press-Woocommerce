@@ -35,11 +35,16 @@ if ($directValidation !== false) {
             'cart_count' => $cart->get_cart_contents_count(),
         ]));
 }
-$secondSellerResult = $cart->add_to_cart($otherSellerProductId, 1);
-if ($secondSellerResult !== false || $cart->get_cart_contents_count() !== 1) {
-    throw new RuntimeException('WooCommerce cart must reject a product assigned to another seller: '
-        . wp_json_encode(['add_result' => $secondSellerResult, 'cart_count' => $cart->get_cart_contents_count()]));
+$storeApiRejected = false;
+try {
+    do_action('woocommerce_store_api_validate_add_to_cart', wc_get_product($otherSellerProductId), ['id' => $otherSellerProductId, 'quantity' => 1]);
+} catch (Exception $error) {
+    $storeApiRejected = str_contains($error->getMessage(), 'одного продавця');
 }
+if (!$storeApiRejected || $cart->get_cart_contents_count() !== 1) {
+    throw new RuntimeException('WooCommerce Store API validation must reject a product assigned to another seller.');
+}
+do_action('woocommerce_store_api_validate_add_to_cart', wc_get_product($sameSellerProductId), ['id' => $sameSellerProductId, 'quantity' => 1]);
 $sameSellerResult = $cart->add_to_cart($sameSellerProductId, 1);
 if (!is_string($sameSellerResult) || $cart->get_cart_contents_count() !== 2) {
     throw new RuntimeException('WooCommerce cart must allow multiple products from the same seller.');
@@ -74,4 +79,4 @@ if (!is_array($errors) || $errors === []) {
 }
 
 $cart->empty_cart();
-echo "PASS: WooCommerce cart blocks mixed sellers, allows same-seller products, and limits gateways\n";
+echo "PASS: classic and Store API validation block mixed sellers, allow same-seller products, and limit gateways\n";

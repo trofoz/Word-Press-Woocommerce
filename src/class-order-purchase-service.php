@@ -13,6 +13,7 @@ final class OrderPurchaseService
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
+        add_action('woocommerce_store_api_validate_add_to_cart', [self::class, 'validate_store_api_add_to_cart'], 10, 2);
         add_filter('woocommerce_available_payment_gateways', [self::class, 'filter_cart_gateways'], 100);
         add_filter('woocommerce_gateway_title', [self::class, 'filter_gateway_title'], 10, 2);
     }
@@ -68,6 +69,25 @@ final class OrderPurchaseService
             }
         }
         return true;
+    }
+
+    /** Prevent Store API (Cart/Checkout Blocks) from adding products from another seller. */
+    public static function validate_store_api_add_to_cart(\WC_Product $product, array $request): void
+    {
+        if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+            return;
+        }
+
+        $candidate = ProductRouting::resolve((int) $product->get_id());
+        if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
+            throw new \Exception(__('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller'));
+        }
+        foreach (WC()->cart->get_cart() as $item) {
+            $existing = ProductRouting::resolve(ProductRouting::cart_item_product_id($item));
+            if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
+                throw new \Exception(__('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller'));
+            }
+        }
     }
 
     public static function filter_cart_gateways(array $gateways): array
