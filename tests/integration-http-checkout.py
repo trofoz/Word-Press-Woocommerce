@@ -155,7 +155,6 @@ blocks_status, blocks_headers, blocks_body = call(
         "billing_address": ADDRESS,
         "shipping_address": {key: value for key, value in ADDRESS.items() if key != "email" and key != "phone"},
         "payment_method": "wfpms_iban",
-        "payment_data": [],
         "customer_note": "",
         "create_account": False,
     },
