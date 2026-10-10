@@ -2,6 +2,8 @@
 
 use WfpMultiSeller\PurchaseExecutionService;
 use WfpMultiSeller\PurchaseRepository;
+use WfpMultiSeller\SecretStore;
+use WfpMultiSeller\SellerRepository;
 
 function wfpms_sandbox_verify_assert(bool $condition, string $message): void
 {
@@ -15,8 +17,76 @@ wfpms_sandbox_verify_assert(is_string($inputPath) && is_file($inputPath), 'Sandb
 $manifest = json_decode((string) file_get_contents($inputPath), true);
 wfpms_sandbox_verify_assert(is_array($manifest) && (int) ($manifest['order_id'] ?? 0) > 0, 'Sandbox handoff is invalid.');
 $orderId = (int) $manifest['order_id'];
+$purchase = PurchaseRepository::for_order($orderId);
+wfpms_sandbox_verify_assert($purchase !== null, 'Sandbox purchase record is missing.');
+global $wpdb;
+$attempt = $wpdb->get_row($wpdb->prepare(
+    'SELECT * FROM ' . PurchaseRepository::attempts_table() . ' WHERE purchase_id=%d ORDER BY id DESC LIMIT 1',
+    (int) $purchase['id']
+), ARRAY_A);
+wfpms_sandbox_verify_assert(is_array($attempt), 'Sandbox card attempt is missing.');
+$config = SellerRepository::config((int) $attempt['config_id']);
+$secret = $config === null ? null : SecretStore::decrypt((string) $config['secret_ciphertext']);
+wfpms_sandbox_verify_assert(is_string($secret) && $secret !== '', 'Sandbox merchant credential could not be decrypted.');
+$merchantAccount = (string) $attempt['merchant_account'];
+$orderReference = (string) $attempt['external_reference'];
+$statusRequest = [
+    'transactionType' => 'CHECK_STATUS',
+    'merchantAccount' => $merchantAccount,
+    'orderReference' => $orderReference,
+    'apiVersion' => 1,
+];
+$statusRequest['merchantSignature'] = hash_hmac('md5', $merchantAccount . ';' . $orderReference, $secret);
+$providerStatus = null;
+$providerReasonCode = '';
+$statusDeadline = time() + 120;
+do {
+    $statusResponse = wp_remote_post('https://api.wayforpay.com/api', [
+        'timeout' => 10,
+        'headers' => ['Content-Type' => 'application/json'],
+        'body' => wp_json_encode($statusRequest),
+    ]);
+    if (!is_wp_error($statusResponse) && wp_remote_retrieve_response_code($statusResponse) === 200) {
+        $statusData = json_decode((string) wp_remote_retrieve_body($statusResponse), true);
+        if (is_array($statusData) && isset($statusData['transactionStatus'])) {
+            wfpms_sandbox_verify_assert(
+                hash_equals($merchantAccount, (string) ($statusData['merchantAccount'] ?? ''))
+                    && hash_equals($orderReference, (string) ($statusData['orderReference'] ?? '')),
+                'WayForPay status response does not match the sandbox attempt.'
+            );
+            $signatureFields = array_map(static fn(string $field): string => (string) ($statusData[$field] ?? ''), [
+                'merchantAccount', 'orderReference', 'amount', 'currency', 'authCode', 'cardPan', 'transactionStatus', 'reasonCode',
+            ]);
+            $expectedSignature = hash_hmac('md5', implode(';', $signatureFields), $secret);
+            wfpms_sandbox_verify_assert(
+                hash_equals($expectedSignature, strtolower((string) ($statusData['merchantSignature'] ?? ''))),
+                'WayForPay status response signature is invalid.'
+            );
+            $providerStatus = (string) $statusData['transactionStatus'];
+            $providerReasonCode = (string) ($statusData['reasonCode'] ?? '');
+            if (in_array($providerStatus, ['Approved', 'Declined', 'Expired', 'Refunded', 'Voided'], true)) {
+                break;
+            }
+        }
+    }
+    usleep(5_000_000);
+} while (time() < $statusDeadline);
+
+if ($providerStatus === 'Declined') {
+    $purchase = PurchaseRepository::for_order($orderId);
+    $order = wc_get_order($orderId);
+    wfpms_sandbox_verify_assert($order instanceof WC_Order && !$order->is_paid(), 'Declined sandbox payment must not mark the WooCommerce order paid.');
+    wfpms_sandbox_verify_assert($purchase !== null
+        && (string) $purchase['state'] !== 'paid'
+        && (int) $purchase['accepted_receipt_id'] === 0
+        && (string) $purchase['execution_state'] === 'pending', 'Declined sandbox payment must not issue or fulfill a paid receipt.');
+    echo 'PASS: WayForPay confirmed the public sandbox card as Declined (reasonCode=' . $providerReasonCode
+        . '); the order stayed unpaid and unfulfilled.' . "\n";
+    exit;
+}
+wfpms_sandbox_verify_assert($providerStatus === 'Approved', 'WayForPay did not return a signed terminal sandbox payment status.');
+
 $deadline = time() + 120;
-$purchase = null;
 do {
     $purchase = PurchaseRepository::for_order($orderId);
     if ($purchase !== null && (string) $purchase['state'] === 'paid') {
@@ -25,28 +95,8 @@ do {
     usleep(1_000_000);
 } while (time() < $deadline);
 
-if ($purchase === null || (string) $purchase['state'] !== 'paid') {
-    global $wpdb;
-    $receiptCounts = $wpdb->get_results($wpdb->prepare(
-        'SELECT classification,COUNT(*) AS count FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d GROUP BY classification',
-        (int) ($purchase['id'] ?? 0)
-    ), ARRAY_A);
-    $receiptSummary = [];
-    foreach ($receiptCounts as $receiptCount) {
-        $receiptSummary[] = (string) $receiptCount['classification'] . ':' . (int) $receiptCount['count'];
-    }
-    $metricsPath = getenv('WFPMS_SANDBOX_METRICS');
-    $metrics = is_string($metricsPath) && is_file($metricsPath)
-        ? json_decode((string) file_get_contents($metricsPath), true)
-        : [];
-    echo 'SAFE_PAYMENT_DIAGNOSTIC state=' . (string) ($purchase['state'] ?? 'missing')
-        . ' receipts=' . implode(',', $receiptSummary)
-        . ' callback_requests=' . (int) ($metrics['requests'] ?? 0)
-        . ' callback_responses=' . implode(',', array_map('intval', $metrics['responses'] ?? [])) . "\n";
-}
 wfpms_sandbox_verify_assert($purchase !== null && (string) $purchase['state'] === 'paid', 'WayForPay did not deliver an accepted payment callback within two minutes.');
 wfpms_sandbox_verify_assert((int) $purchase['accepted_receipt_id'] > 0, 'Accepted callback receipt was not stored.');
-global $wpdb;
 $accepted = $wpdb->get_row($wpdb->prepare(
     'SELECT id,classification FROM ' . PurchaseRepository::receipts_table() . ' WHERE id=%d AND purchase_id=%d',
     (int) $purchase['accepted_receipt_id'],

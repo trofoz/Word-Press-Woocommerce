@@ -231,7 +231,7 @@ jobs:
           WFPMS_SANDBOX_INPUT: ${{ runner.temp }}/wfpms-sandbox-payment.json
         run: node tests/wayforpay-sandbox-browser.mjs
 
-      - name: Verify signed callback, accepted receipt, and WooCommerce completion
+      - name: Verify signed WayForPay status and WooCommerce order outcome
         env:
           WP_PATH: ${{ runner.temp }}/wfpms-sandbox-wp
           WP_CLI_ALLOW_ROOT: '1'

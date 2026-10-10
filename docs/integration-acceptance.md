@@ -22,13 +22,13 @@
 
 ## Окремий WayForPay sandbox запуск
 
-Workflow має ручний параметр `run_wayforpay_sandbox`. Для одноразового запуску через push у тестову гілку commit-повідомлення також може містити маркер `[run-wfp-sandbox]`. В обох випадках окремий job створює одну тимчасову БД, тестового продавця, товар і замовлення на UAH 10; шифрує опублікований sandbox credential випадковим ключем лише на час роботи runner; подає одну опубліковану тестову картку на сторінці WayForPay; перевіряє підписаний callback, запис надходження та завершення WooCommerce-замовлення.
+Workflow має ручний параметр `run_wayforpay_sandbox`. Для одноразового запуску через push у тестову гілку commit-повідомлення також може містити маркер `[run-wfp-sandbox]`. Окремий job створює одну тимчасову БД, тестового продавця, товар і замовлення на UAH 10; шифрує опублікований sandbox credential випадковим ключем лише на час runner; формує HTTPS `serviceUrl` і `returnUrl`; відкриває hosted payment form; підписаним `CHECK_STATUS` читає результат тестової картки та перевіряє, що відхилена транзакція не оплатила й не виконала WooCommerce-замовлення.
 
 Для callback використовується одноразовий Cloudflare Quick Tunnel до локального allowlist-проксі. Проксі пропускає тільки одноразовий URL платіжної форми одного тестового замовлення, точний WayForPay callback `wc-api=wfpms_wayforpay` і сторінку повернення цього замовлення. Інші маршрути WordPress не експонуються. Логи й artifacts не містять merchant secret, URL платежу чи callback body; процеси зупиняються в `always()` cleanup. Зовнішній тунель тимчасовий і живе лише під час job.
 
-Офіційні тестові реквізити merchant завантажуються в runner без запису в репозиторій або GitHub secrets ([WayForPay sandbox docs](https://wiki.wayforpay.com/view/852472)). Публічні картки для цього sandbox сценарію вказані в інструкції Weblium; реквізити expiry/CVV там описані як довільні, але дійсні на момент введення ([Weblium test mode](https://help.weblium.com/uk/article/pidklyuchennya-wayforpay-u-yakosti-platizhnoyi-sistemi-14ymjfz/)). Це допоміжне джерело, а не документація самого WayForPay.
+Офіційні тестові реквізити merchant завантажуються в runner без запису в репозиторій або GitHub secrets ([WayForPay sandbox docs](https://wiki.wayforpay.com/view/852472)). Публічний тестовий режим картки описано в інструкції Weblium: ці тестові картки дають відхилену оплату; для успішної авторизації там вказана реальна картка зі справжніми коштами ([Weblium test mode](https://help.weblium.com/uk/article/pidklyuchennya-wayforpay-u-yakosti-platizhnoyi-sistemi-14ymjfz/)). Через це цей job перевіряє негативний sandbox шлях. Він не є доказом успішного callback/fulfillment шляху; такий успішний тест потребує окремо погодженого способу тестування без реального списання.
 
-Фактичний sandbox результат записується після першого запуску тут, разом із посиланням на Actions run. Поки такий запуск не завершився успішно, sandbox приймання залишається **неперевіреним**.
+Фактичний sandbox результат і посилання на Actions run додаються після успішної перевірки підписаного `CHECK_STATUS` та незміненого неоплаченого замовлення.
 
 ## Потрібен окремий тестовий магазин
 
