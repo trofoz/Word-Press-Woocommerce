@@ -134,11 +134,19 @@ $eventCountAfterRetry = (int) $wpdb->get_var($wpdb->prepare(
 wfpms_callback_integration_assert($receiptCountAfterRetry === 1 && $eventCountAfterRetry === 1, 'Repeated identical Approved callback is idempotent.');
 
 sleep(2);
+$executionArgs = [(int) $paidPurchase['id']];
+$scheduledExecution = wp_next_scheduled('wfpms_process_execution', $executionArgs);
+wfpms_callback_integration_assert($scheduledExecution !== false, 'Accepted callback schedules the purchase execution hook.');
 \WP_CLI::runcommand('cron event run wfpms_process_execution');
-$paidOrder = wc_get_order((int) $paidOrder->get_id());
-$paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
+$paidOrderId = (int) $paidOrder->get_id();
+$paidOrder = wc_get_order($paidOrderId);
+$paidPurchase = PurchaseRepository::for_order($paidOrderId);
+$paidOrderStatus = $paidOrder instanceof WC_Order ? $paidOrder->get_status() : 'missing';
+$paidExecutionState = (string) ($paidPurchase['execution_state'] ?? 'missing');
+$paidExecutionError = (string) ($paidPurchase['execution_error_code'] ?? '');
 wfpms_callback_integration_assert($paidOrder instanceof WC_Order && $paidOrder->is_paid()
-    && $paidPurchase !== null && (string) $paidPurchase['execution_state'] === 'done', 'Accepted payment completes its WooCommerce order once.');
+    && $paidPurchase !== null && $paidExecutionState === 'done', 'Accepted payment completion state: order=' . $paidOrderStatus
+    . ', execution=' . $paidExecutionState . ', error=' . $paidExecutionError . '.');
 $executionCount = (int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
     (int) $paidPurchase['id'], 'execution_done'
