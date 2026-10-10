@@ -21,12 +21,14 @@ for checkout_kind in ("classic_order_id", "blocks_order_id"):
     if response.status != 200:
         raise RuntimeError(f"Order-pay GET for {order_id} returned HTTP {response.status}.")
     if "Integration Seller 1" not in body:
-        marker = "Переказ на рахунок"
-        start = body.find(marker)
-        excerpt = body[max(0, start - 300):start + 900] if start >= 0 else body[:1200]
+        markers = ["wfpms-checkout-seller", "payment_method_wfpms_iban", "order_review", "Bank transfer", "woocommerce-pay"]
+        excerpts = {}
+        for marker in markers:
+            start = body.lower().find(marker.lower())
+            excerpts[marker] = body[max(0, start - 200):start + 500] if start >= 0 else "<missing>"
         raise RuntimeError(
             f"Order-pay page for {order_id} does not show the frozen legal recipient; "
-            f"final URL={response.geturl()}; excerpt={excerpt!r}"
+            f"final URL={response.geturl()}; markers={excerpts!r}"
         )
     if "payment_method_wfpms_iban" not in body:
         raise RuntimeError(f"Order-pay page for {order_id} does not show the saved IBAN method.")
