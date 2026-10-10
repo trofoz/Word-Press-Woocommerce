@@ -1,3 +1,4 @@
+No syntax errors detected in tests/wayforpay-sandbox-seed.php
 <?php
 
 use WfpMultiSeller\ProductRouting;
@@ -25,6 +26,11 @@ update_option('home', $tunnelUrl);
 update_option('siteurl', $tunnelUrl);
 $domain = (string) wp_parse_url($tunnelUrl, PHP_URL_HOST);
 wfpms_sandbox_assert($domain !== '', 'Ephemeral callback host is invalid.');
+// WP-CLI has no web request context; mirror the HTTPS tunnel so WooCommerce signs HTTPS callback URLs.
+$_SERVER['HTTPS'] = 'on';
+$_SERVER['SERVER_PORT'] = '443';
+$_SERVER['REQUEST_SCHEME'] = 'https';
+$_SERVER['HTTP_HOST'] = $domain;
 
 $sellerId = SellerRepository::save(null, [
     'internal_label' => 'WayForPay sandbox seller',
@@ -65,6 +71,21 @@ $gateway = WC()->payment_gateways()->payment_gateways()['wfpms_card'] ?? null;
 wfpms_sandbox_assert($gateway instanceof WayForPayGateway, 'WayForPay card gateway is unavailable.');
 $result = $gateway->process_payment((int) $order->get_id());
 wfpms_sandbox_assert(($result['result'] ?? '') === 'success' && !empty($result['redirect']), 'Could not create the sandbox payment attempt.');
+$purchase = PurchaseRepository::for_order((int) $order->get_id());
+wfpms_sandbox_assert($purchase !== null, 'Sandbox purchase record was not created.');
+global $wpdb;
+$storedPayload = $wpdb->get_var($wpdb->prepare(
+    'SELECT payload FROM ' . PurchaseRepository::attempts_table() . ' WHERE purchase_id=%d ORDER BY id DESC LIMIT 1',
+    (int) $purchase['id']
+));
+$paymentPayload = is_string($storedPayload) ? json_decode($storedPayload, true) : null;
+wfpms_sandbox_assert(is_array($paymentPayload), 'Signed WayForPay request was not stored.');
+foreach (['serviceUrl', 'returnUrl'] as $urlField) {
+    $urlParts = isset($paymentPayload[$urlField]) ? wp_parse_url((string) $paymentPayload[$urlField]) : false;
+    wfpms_sandbox_assert(is_array($urlParts)
+        && ($urlParts['scheme'] ?? '') === 'https'
+        && ($urlParts['host'] ?? '') === $domain, 'Signed WayForPay callback and return URLs must use the HTTPS tunnel.');
+}
 
 $manifest = wp_json_encode([
     'order_id' => (int) $order->get_id(),
