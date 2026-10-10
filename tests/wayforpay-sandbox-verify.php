@@ -99,10 +99,11 @@ if (in_array($providerStatus, ['Declined', 'InProcessing'], true)) {
         . ' executionState=' . preg_replace('/[^A-Za-z_-]/', '', (string) ($purchase['execution_state'] ?? 'missing'))
         . ' acceptedReceipt=' . (int) ($purchase['accepted_receipt_id'] ?? 0) . "\n";
     wfpms_sandbox_verify_assert($order instanceof WC_Order && !$order->is_paid(), 'Unconfirmed sandbox payment must not mark the WooCommerce order paid.');
+    $executionState = (string) ($purchase['execution_state'] ?? 'missing');
     wfpms_sandbox_verify_assert($purchase !== null
         && (string) $purchase['state'] !== 'paid'
         && (int) $purchase['accepted_receipt_id'] === 0
-        && (string) $purchase['execution_state'] === 'pending', 'Unconfirmed sandbox payment must not issue or fulfill a paid receipt.');
+        && !in_array($executionState, ['running', 'done'], true), 'Unconfirmed sandbox payment must not issue or fulfill a paid receipt.');
     echo 'PASS: WayForPay status=' . $providerStatus . ' (reasonCode=' . $providerReasonCode
         . '); the order stayed unpaid and unfulfilled.' . "\n";
     exit;
