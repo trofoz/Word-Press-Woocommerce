@@ -90,15 +90,15 @@ echo 'SAFE_STATUS_DIAGNOSTIC http=' . $lastStatusHttpCode
     . ' reasonCode=' . preg_replace('/[^0-9]/', '', $providerReasonCode)
     . ' reason=' . substr((string) $safeReason, 0, 120)
     . ' responseKeys=' . implode(',', $lastStatusKeys) . "\n";
-if ($providerStatus === 'Declined') {
+if (in_array($providerStatus, ['Declined', 'InProcessing'], true)) {
     $purchase = PurchaseRepository::for_order($orderId);
     $order = wc_get_order($orderId);
-    wfpms_sandbox_verify_assert($order instanceof WC_Order && !$order->is_paid(), 'Declined sandbox payment must not mark the WooCommerce order paid.');
+    wfpms_sandbox_verify_assert($order instanceof WC_Order && !$order->is_paid(), 'Unconfirmed sandbox payment must not mark the WooCommerce order paid.');
     wfpms_sandbox_verify_assert($purchase !== null
         && (string) $purchase['state'] !== 'paid'
         && (int) $purchase['accepted_receipt_id'] === 0
-        && (string) $purchase['execution_state'] === 'pending', 'Declined sandbox payment must not issue or fulfill a paid receipt.');
-    echo 'PASS: WayForPay confirmed the public sandbox card as Declined (reasonCode=' . $providerReasonCode
+        && (string) $purchase['execution_state'] === 'pending', 'Unconfirmed sandbox payment must not issue or fulfill a paid receipt.');
+    echo 'PASS: WayForPay status=' . $providerStatus . ' (reasonCode=' . $providerReasonCode
         . '); the order stayed unpaid and unfulfilled.' . "\n";
     exit;
 }

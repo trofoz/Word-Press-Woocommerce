@@ -90,7 +90,7 @@ jobs:
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
 
   wayforpay-sandbox:
-    name: WayForPay sandbox payment and callback
+    name: WayForPay sandbox hosted-payment status
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.run_wayforpay_sandbox) ||
       (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-wfp-sandbox]'))
