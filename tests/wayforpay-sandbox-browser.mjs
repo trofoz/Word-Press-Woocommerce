@@ -40,11 +40,11 @@ try {
       }
 
       const find = (pattern) => descriptors.find(({ descriptor }) => pattern.test(descriptor))?.field;
-      const card = find(/(^|[^\w])card($|[^\w])|card.?number|cardpan|cc.?number|(^|[^\w])pan($|[^\w])|карт|номер.*карт/);
+      const card = find(/(^|[^\w])card($|[^\w])|card.?number|cardnumber|cardpan|cc.?number|(^|[^\w])pan($|[^\w])|карт|номер.*карт/);
       const month = find(/exp.?month|expiry.?month|cc.?exp.?month|місяц.*закін|month/);
       const year = find(/exp.?year|expiry.?year|cc.?exp.?year|рік.*закін|year/);
-      const expiry = find(/expiry|expiration|cc.?exp|термін дії|срок действия/);
-      const cvv = find(/cvv|cvc|cc.?csc|security.?code|код безпеки|код безопасности/);
+      const expiry = find(/expiry|expiration|validity|cc.?exp|термін дії|срок действия/);
+      const cvv = find(/cvv|cvc|secure|cc.?csc|security.?code|код безпеки|код безопасности/);
       diagnostic.push({
         frame_origin: (() => { try { return new URL(frame.url()).origin; } catch { return '<opaque>'; } })(),
         visible_inputs: descriptors.map(({ safe }) => safe),
