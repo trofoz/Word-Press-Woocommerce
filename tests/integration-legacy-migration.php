@@ -156,7 +156,13 @@ $callback = [
     'transactionStatus' => 'Approved',
     'reasonCode' => '1100',
 ];
-$callback['merchantSignature'] = $upstreamGateway->getResponseSignature($callback);
+$expectedLegacySignature = hash_hmac('md5', implode(';', array_map('strval', [
+    $callback['merchantAccount'], $callback['orderReference'], $callback['amount'], $callback['currency'],
+    $callback['authCode'], $callback['cardPan'], $callback['transactionStatus'], $callback['reasonCode'],
+])), $secret);
+wfpms_legacy_assert(hash_equals($expectedLegacySignature, $upstreamGateway->getResponseSignature($callback)),
+    'original gateway response signature helper uses the imported merchant secret and WayForPay field order');
+$callback['merchantSignature'] = $expectedLegacySignature;
 $callbackResponse = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
     'timeout' => 10,
     'headers' => ['Content-Type' => 'application/json'],
