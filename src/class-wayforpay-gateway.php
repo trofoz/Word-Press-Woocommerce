@@ -537,7 +537,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
 
         $latestPurchase = PurchaseRepository::for_order($orderId);
         if ($latestPurchase !== null && (string) $latestPurchase['execution_state'] === 'pending'
-            && in_array((string) $latestPurchase['state'], ['paid', 'free'], true)) {
+            && PurchaseExecutionService::is_financially_accepted($latestPurchase)) {
             PurchaseExecutionService::schedule((int) $latestPurchase['id']);
         }
 

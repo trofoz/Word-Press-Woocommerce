@@ -365,6 +365,20 @@ foreach (['Refunded', 'Voided'] as $terminalStatus) {
         'A signed ' . $terminalStatus . ' followed by Approved on the same unexpired attempt remains review-only.');
 }
 
+[$reversedAcceptedOrder, $reversedAcceptedPurchase, $reversedAcceptedAttempt] = $createAttempt();
+$sendApproved($reversedAcceptedAttempt, (string) $reversedAcceptedAttempt['expected_amount'], (string) $reversedAcceptedAttempt['currency'], 'AUTH-ACCEPTED-THEN-REFUNDED');
+$sendApproved($reversedAcceptedAttempt, (string) $reversedAcceptedAttempt['expected_amount'], (string) $reversedAcceptedAttempt['currency'], 'AUTH-REFUND', null, null, 'Refunded');
+$reversedAcceptedPurchase = PurchaseRepository::for_order((int) $reversedAcceptedOrder->get_id());
+wfpms_callback_integration_assert($reversedAcceptedPurchase !== null
+    && (string) $reversedAcceptedPurchase['state'] === 'paid_review'
+    && !PurchaseExecutionService::is_financially_accepted($reversedAcceptedPurchase),
+    'A refund after accepted payment blocks further fulfillment.');
+$sendApproved($reversedAcceptedAttempt, (string) $reversedAcceptedAttempt['expected_amount'], (string) $reversedAcceptedAttempt['currency'], 'AUTH-LATE-AFTER-REFUND');
+$reversedAcceptedPurchase = PurchaseRepository::for_order((int) $reversedAcceptedOrder->get_id());
+wfpms_callback_integration_assert($reversedAcceptedPurchase !== null
+    && !PurchaseExecutionService::is_financially_accepted($reversedAcceptedPurchase),
+    'A late Approved callback cannot revive fulfillment after a prior refund.');
+
 [$distinctAttemptsOrder, $distinctAttemptsPurchase, $firstDistinctAttempt] = $createAttempt();
 $wpdb->update(PurchaseRepository::attempts_table(), ['status' => 'expired'], ['id' => (int) $firstDistinctAttempt['id']]);
 $secondAttemptResult = $gateway->process_payment((int) $distinctAttemptsOrder->get_id());

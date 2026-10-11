@@ -34,12 +34,52 @@ final class PurchaseExecutionService
             return $statuses;
         }
         if (!isset(self::$authorizedPaymentCompletions[$orderId])
-            || (string) $purchase['state'] !== 'paid'
+            || !self::is_financially_accepted($purchase)
             || (string) $purchase['execution_state'] !== 'running'
             || self::$authorizedPaymentCompletions[$orderId] !== (int) $purchase['id']) {
             return [];
         }
         return $statuses;
+    }
+
+    /** A secondary receipt may put a purchase in review without invalidating its first accepted payment. */
+    public static function is_financially_accepted(array $purchase): bool
+    {
+        global $wpdb;
+        $state = (string) ($purchase['state'] ?? '');
+        if (in_array($state, ['paid', 'free'], true)) {
+            return true;
+        }
+        $receiptId = (int) ($purchase['accepted_receipt_id'] ?? 0);
+        if ($state !== 'paid_review' || $receiptId < 1 || empty($purchase['id'])) {
+            return false;
+        }
+        $receipt = $wpdb->get_row($wpdb->prepare(
+            'SELECT r.classification,r.transaction_status,r.attempt_id,a.status AS attempt_status '
+            . 'FROM ' . PurchaseRepository::receipts_table() . ' r '
+            . 'LEFT JOIN ' . PurchaseRepository::attempts_table() . ' a ON a.id=r.attempt_id '
+            . 'WHERE r.id=%d AND r.purchase_id=%d',
+            $receiptId,
+            (int) $purchase['id']
+        ), ARRAY_A);
+        if (!is_array($receipt) || (string) $receipt['classification'] !== 'accepted'
+            || !in_array((string) $receipt['transaction_status'], ['Approved', 'OperatorConfirmed'], true)) {
+            return false;
+        }
+        $attemptId = (int) $receipt['attempt_id'];
+        if ($attemptId === 0) {
+            return true;
+        }
+        $terminalEvent = $wpdb->get_var($wpdb->prepare(
+            'SELECT id FROM ' . PurchaseRepository::events_table()
+            . ' WHERE purchase_id=%d AND attempt_id=%d AND kind IN (%s,%s) LIMIT 1',
+            (int) $purchase['id'],
+            $attemptId,
+            'callback_Refunded',
+            'callback_Voided'
+        ));
+        return !$terminalEvent
+            && in_array((string) $receipt['attempt_status'], ['approved', 'confirmed'], true);
     }
 
     public static function schedule(int $purchaseId): void
@@ -90,7 +130,7 @@ final class PurchaseExecutionService
     {
         global $wpdb;
         $purchase = self::purchase_by_id($purchaseId);
-        if ($purchase === null || !in_array((string) $purchase['state'], ['paid', 'free'], true)) {
+        if ($purchase === null || !self::is_financially_accepted($purchase)) {
             return;
         }
         $orderId = (int) $purchase['order_id'];
@@ -107,7 +147,7 @@ final class PurchaseExecutionService
             }
             $locked = PurchaseRepository::for_order($orderId, true);
             if ($locked === null || (int) $locked['id'] !== $purchaseId
-                || !in_array((string) $locked['state'], ['paid', 'free'], true)
+                || !self::is_financially_accepted($locked)
                 || (string) $locked['execution_state'] !== 'pending') {
                 $wpdb->query('ROLLBACK');
                 return;
