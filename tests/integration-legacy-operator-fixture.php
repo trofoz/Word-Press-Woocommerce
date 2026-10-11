@@ -118,6 +118,7 @@ if ($mode === 'seed') {
         'receipts' => $purchase ? PurchaseRepository::receipts_for_purchase((int) $purchase['id']) : [],
         'events' => $purchase ? PurchaseRepository::events_for_purchase((int) $purchase['id']) : [],
         'status' => wc_get_order($orderId)->get_status(),
+        'financially_accepted' => $purchase ? PurchaseExecutionService::is_financially_accepted($purchase) : false,
     ]);
     return;
 }

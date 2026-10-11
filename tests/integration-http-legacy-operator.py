@@ -53,8 +53,8 @@ def post(action, fields, notice, order_id=None, page=PAGE):
     assert status == 200 and notice in url, (action, status, url)
     return body
 
-def payload(reference, merchant='synthetic-operator-history', secret='synthetic-operator-history-secret'):
-    values = [merchant, str(reference), '10.00', 'UAH', 'SYNTHETIC-AUTH', '411111******1111', 'Approved', '1100']
+def payload(reference, merchant='synthetic-operator-history', secret='synthetic-operator-history-secret', transaction_status='Approved', auth_code='SYNTHETIC-AUTH'):
+    values = [merchant, str(reference), '10.00', 'UAH', auth_code, '411111******1111', transaction_status, '1100']
     result = dict(zip(['merchantAccount', 'orderReference', 'amount', 'currency', 'authCode', 'cardPan', 'transactionStatus', 'reasonCode'], values))
     result['merchantSignature'] = hmac.new(secret.encode(), ';'.join(values).encode(), hashlib.md5).hexdigest()
     return result
@@ -211,3 +211,66 @@ assert inspect('run', new['order_id']) == {'payment_complete': 1, 'completed': 1
 assert callback(new_data, 'wfpms_wayforpay')[0] == 200
 assert inspect('run', new['order_id']) == {'payment_complete': 0, 'completed': 0}
 print('PASS: after ownership return, new standalone card payment uses its own merchant/route and completes once; duplicate completion zero', flush=True)
+
+# Reproduce terminal legacy events on actual mapped attempts, without SQL-seeded receipts/events.
+post('wfpms_claim_legacy_callback', {'confirm_callback_owner': 1}, 'callback_owned')
+legacy_terminal_failures = []
+for terminal_status in ['Refunded', 'Voided']:
+    for scope in ['accepted', 'extra']:
+        new_fixture = inspect('original_payment')
+        order_id = new_fixture['unmapped']
+        post('wfpms_migrate_legacy_order', {'order_id': order_id, 'seller_id': fixture['seller_id']}, 'order_migrated', order_id)
+        accepted_ref = str(order_id) + '_woo_w4p_11'
+        assert callback(payload(accepted_ref))[0] == 200
+        before = inspect('order', order_id)
+        assert len(before['receipts']) == 1 and before['receipts'][0]['classification'] == 'needs_review'
+        accepted_receipt_id = before['receipts'][0]['id']
+        post('wfpms_review_receipt', {'receipt_id': accepted_receipt_id, 'reason': 'Synthetic terminal-event regression', 'stock_reviewed': 1}, 'receipt_reviewed', page='/wp-admin/admin.php?page=wfpms-payments')
+        accepted = inspect('order', order_id)
+        assert accepted['financially_accepted'] and accepted['purchase']['execution_state'] == 'pending'
+        assert accepted['status'] == 'pending'
+        terminal_ref = accepted_ref
+        if scope == 'extra':
+            terminal_ref = str(order_id) + '_woo_w4p_12'
+            assert callback(payload(terminal_ref, auth_code='SYNTHETIC-EXTRA-AUTH'))[0] == 200
+        plugin('deactivate')
+        try:
+            assert callback(payload(terminal_ref, transaction_status=terminal_status))[0] == 200
+            terminal = inspect('order', order_id)
+            assert any(event['kind'] == 'legacy_' + terminal_status for event in terminal['events'])
+            # Change a signed field so this Approved is new evidence rather than an exact replay.
+            delayed = payload(terminal_ref, auth_code='SYNTHETIC-DELAYED-AUTH')
+            assert callback(delayed)[0] == 200
+            delayed_state = inspect('order', order_id)
+            expected_receipts = 1 if scope == 'accepted' else 2
+            assert len(delayed_state['receipts']) == expected_receipts
+            assert int(delayed_state['purchase']['accepted_receipt_id']) == int(accepted_receipt_id)
+            assert delayed_state['purchase']['state'] == 'paid_review'
+            assert delayed_state['purchase']['execution_state'] == 'pending'
+            terminal_attempt = next(attempt for attempt in delayed_state['attempts'] if attempt['external_reference'] == terminal_ref)
+            assert terminal_attempt['status'] == 'approved', 'Regression did not reproduce reapproval of the same historical attempt'
+            assert any(event['kind'] == 'legacy_reference_conflict' for event in delayed_state['events'])
+        finally:
+            plugin('activate')
+        # Upstream must be present: otherwise ownership return would be blocked only by inactivity.
+        post('wfpms_release_legacy_callback', {'confirm_release': 1}, 'callback_release_blocked')
+        assert inspect()['owner'] and inspect()['upstream_registered']
+        counts = inspect('run', order_id)
+        after_run = inspect('order', order_id)
+        expected_counts = {'payment_complete': 0, 'completed': 0} if scope == 'accepted' else {'payment_complete': 1, 'completed': 1}
+        expected_status = 'pending' if scope == 'accepted' else 'completed'
+        print(f'LEGACY TERMINAL runtime: status={terminal_status}; scope={scope}; financially_accepted={delayed_state["financially_accepted"]}; payment_complete={counts["payment_complete"]}; completed={counts["completed"]}; order={after_run["status"]}; ownership_return=blocked', flush=True)
+        if counts != expected_counts or after_run['status'] != expected_status or delayed_state['financially_accepted'] != (scope == 'extra'):
+            legacy_terminal_failures.append(f'{terminal_status}/{scope}: expected {expected_counts}/{expected_status}, got {counts}/{after_run["status"]}')
+        # Replays of both terminal and delayed evidence must preserve financial rows and not complete again.
+        events_before_repeat = after_run['events']
+        receipts_before_repeat = after_run['receipts']
+        assert callback(payload(terminal_ref, transaction_status=terminal_status))[0] == 200
+        assert callback(delayed)[0] == 200
+        repeated = inspect('order', order_id)
+        assert repeated['events'] == events_before_repeat and repeated['receipts'] == receipts_before_repeat
+        assert inspect('run', order_id) == {'payment_complete': 0, 'completed': 0}
+        post('wfpms_release_legacy_callback', {'confirm_release': 1}, 'callback_release_blocked')
+        assert inspect()['owner']
+assert not legacy_terminal_failures, '\n'.join(legacy_terminal_failures)
+print('PASS: legacy Refunded/Voided forbid reapproved accepted attempt execution; extra-attempt terminal events preserve valid acceptance; duplicate financial rows and completions zero; ownership return blocked', flush=True)
