@@ -163,9 +163,14 @@ $callbackResponse = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
     'body' => wp_json_encode($callback),
 ]);
 $setupOrder = wc_get_order((int) $setupOrder->get_id());
+$callbackStatus = is_wp_error($callbackResponse) ? 'WP_Error: ' . $callbackResponse->get_error_message()
+    : (string) wp_remote_retrieve_response_code($callbackResponse);
+$callbackBody = is_wp_error($callbackResponse) ? '' : substr(wp_strip_all_tags((string) wp_remote_retrieve_body($callbackResponse)), 0, 180);
 wfpms_legacy_assert(!is_wp_error($callbackResponse) && wp_remote_retrieve_response_code($callbackResponse) === 200
     && $setupOrder instanceof WC_Order && $setupOrder->is_paid(),
-    'unmapped legacy callbacks pass through to the original gateway while the cutover is staged');
+    'unmapped legacy callbacks pass through to the original gateway while the cutover is staged; HTTP '
+    . $callbackStatus . ', order status ' . ($setupOrder instanceof WC_Order ? $setupOrder->get_status() : 'missing')
+    . ', response body ' . $callbackBody);
 update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $activeGateways = LegacyMigration::filter_gateways($gateways);
 wfpms_legacy_assert(!isset($activeGateways['wayforpay']) && isset($activeGateways['wfpms_card']) && isset($activeGateways['wfpms_iban']),
