@@ -187,6 +187,60 @@ update_option('wfpms_integration_manual_product_id', $manualProduct->get_id(), f
 $resolvedManual = ProductRouting::resolve($manualProduct->get_id());
 wfpms_integration_assert($resolvedManual['ok'] && $resolvedManual['seller_id'] === $sellerIds[2] && $resolvedManual['source'] === 'manual', 'manual product assignment overrides category routing');
 
+// Standalone must work alongside an installed/configured upstream plugin without importing its key
+// or taking ownership of the historical callback route.
+update_option('woocommerce_wayforpay_settings', [
+    'enabled' => 'yes',
+    'merchant_account' => 'synthetic-upstream-merchant',
+    'secret_key' => 'synthetic-upstream-secret',
+], false);
+$upstreamGateway = WC()->payment_gateways()->payment_gateways()['wayforpay'] ?? null;
+$adminUsers = get_users(['role' => 'administrator', 'number' => 1]);
+if (isset($adminUsers[0])) {
+    wp_set_current_user((int) $adminUsers[0]->ID);
+}
+ob_start();
+WfpMultiSeller\LegacyMigration::render_page();
+$standaloneAdminHtml = (string) ob_get_clean();
+wfpms_integration_assert(str_contains($standaloneAdminHtml, 'wfpms_enable_standalone_mode')
+    && str_contains($standaloneAdminHtml, 'імпорту старого мерчанта')
+    && str_contains($standaloneAdminHtml, 'історичного callback'),
+    'migration admin page offers standalone activation even when upstream plugin/settings are present');
+update_option('wfpms_standalone_mode_enabled', 'yes', false);
+wfpms_integration_assert(WfpMultiSeller\LegacyMigration::standalone_activation_allowed()
+    && WfpMultiSeller\LegacyMigration::is_transition_enabled()
+    && !WfpMultiSeller\LegacyMigration::is_legacy_transition_enabled()
+    && !WfpMultiSeller\LegacyMigration::owns_callback_route()
+    && $upstreamGateway instanceof WC_Payment_Gateway
+    && has_action('woocommerce_api_wc_wayforpay', [$upstreamGateway, 'check_wayforpay_response']) !== false,
+    'standalone activation is available beside upstream settings and leaves the historical callback with upstream');
+$standaloneOrder = wc_create_order();
+$standaloneOrder->add_product(wc_get_product($product->get_id()), 1);
+$standaloneOrder->set_payment_method('wfpms_iban');
+$standaloneOrder->calculate_totals();
+$standaloneOrder->save();
+$standaloneGateway = new WfpMultiSeller\BankTransferGateway();
+$standaloneResult = $standaloneGateway->process_payment((int) $standaloneOrder->get_id());
+$standalonePurchase = WfpMultiSeller\PurchaseRepository::for_order((int) $standaloneOrder->get_id());
+wfpms_integration_assert(($standaloneResult['result'] ?? '') === 'success'
+    && $standalonePurchase !== null
+    && count(WfpMultiSeller\PurchaseRepository::attempts_for_purchase((int) $standalonePurchase['id'])) === 1,
+    'standalone mode creates a real fork purchase and IBAN attempt without legacy import');
+update_option('wfpms_sales_paused', 'yes', false);
+$pausedStandaloneOrder = wc_create_order();
+$pausedStandaloneOrder->add_product(wc_get_product($product->get_id()), 1);
+$pausedStandaloneOrder->set_payment_method('wfpms_iban');
+$pausedStandaloneOrder->calculate_totals();
+$pausedStandaloneOrder->save();
+$pausedStandaloneResult = $standaloneGateway->process_payment((int) $pausedStandaloneOrder->get_id());
+wfpms_integration_assert(($pausedStandaloneResult['result'] ?? '') === 'failure'
+    && WfpMultiSeller\PurchaseRepository::for_order((int) $pausedStandaloneOrder->get_id()) === null
+    && WfpMultiSeller\PaymentOperations::payment_allowed_for_order((int) $standaloneOrder->get_id()),
+    'sales pause blocks new standalone purchases while preserving already-issued payment obligations');
+delete_option('wfpms_sales_paused');
+delete_option('wfpms_standalone_mode_enabled');
+delete_option('woocommerce_wayforpay_settings');
+
 $order = wc_create_order();
 $order->set_billing_email('integration@example.test');
 $order->add_product(wc_get_product($product->get_id()), 1);

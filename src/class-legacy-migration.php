@@ -281,10 +281,9 @@ final class LegacyMigration
             echo '</div>';
             return;
         }
-        if (!self::upstream_callback_is_registered() && !class_exists('WC_wayforpay')
-            && !self::owns_callback_route() && self::legacy_settings() === null) {
+        if (!self::is_legacy_transition_enabled() && !self::owns_callback_route()) {
             echo '<h2>' . esc_html__('Самостійний запуск', 'wayforpay-multi-seller') . '</h2>';
-            echo '<p>' . esc_html__('Оригінальний WayForPay не виявлено. Увімкніть окремий standalone режим, щоб використовувати профілі продавців без імпорту старого мерчанта чи переходу callback.', 'wayforpay-multi-seller') . '</p>';
+            echo '<p>' . esc_html__('Увімкніть окремий standalone режим, щоб приймати нові оплати через профілі продавців без імпорту старого мерчанта. Налаштування не змінюють власника історичного callback: старий маршрут залишається оригінальному плагіну.', 'wayforpay-multi-seller') . '</p>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_enable_standalone_mode">';
             wp_nonce_field('wfpms_enable_standalone_mode');
             echo '<p><label><input type="checkbox" name="confirm_standalone" value="1" required> '
@@ -518,13 +517,17 @@ final class LegacyMigration
     public static function enable_standalone_mode(): void
     {
         self::authorize_post('wfpms_enable_standalone_mode');
-        if (!isset($_POST['confirm_standalone']) || self::owns_callback_route()
-            || self::upstream_callback_is_registered() || class_exists('WC_wayforpay')
-            || self::legacy_settings() !== null) {
+        if (!isset($_POST['confirm_standalone']) || !self::standalone_activation_allowed()) {
             self::redirect('standalone_blocked');
         }
         update_option(self::STANDALONE_OPTION, 'yes', false);
         self::redirect('standalone_enabled');
+    }
+
+    /** Standalone starts only new fork payments and must never take an already-owned legacy route. */
+    public static function standalone_activation_allowed(): bool
+    {
+        return !self::owns_callback_route() && !self::is_legacy_transition_enabled();
     }
 
     public static function admin_notice(): void

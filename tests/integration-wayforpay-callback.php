@@ -222,11 +222,13 @@ $persistedAttemptConfigId = (int) $wpdb->get_var($wpdb->prepare(
 wfpms_callback_integration_assert($currentConfig !== null
     && (int) $currentConfig['id'] !== (int) $paidAttempt['config_id']
     && $persistedAttemptConfigId === (int) $paidAttempt['config_id'], 'Merchant key rotation appends a new seller configuration while keeping the issued attempt pinned.');
+update_option('wfpms_sales_paused', 'yes', false);
 $paidFields = $sendApproved($paidAttempt, (string) $paidAttempt['expected_amount'], (string) $paidAttempt['currency'], 'AUTH-TEST', $secret);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null
     && (string) $paidPurchase['state'] === 'paid'
-    && (int) $paidPurchase['accepted_receipt_id'] > 0, 'Matching Approved callback records one accepted payment.');
+    && (int) $paidPurchase['accepted_receipt_id'] > 0, 'Matching Approved callback for an already-issued payment is processed while new sales are paused.');
+delete_option('wfpms_sales_paused');
 $receiptCount = (int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
     (int) $paidPurchase['id']
