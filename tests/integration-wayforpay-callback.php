@@ -40,7 +40,7 @@ $sellerId = SellerRepository::save(null, [
     'merchant_account' => 'integration-merchant',
     'merchant_domain' => (string) wp_parse_url(home_url('/'), PHP_URL_HOST),
     'card_enabled' => 1,
-    'iban_enabled' => 0,
+    'iban_enabled' => 1,
     'secret_plaintext' => $secret,
     'operator_checked' => false,
 ], SecretStore::encrypt($secret), $adminId);
@@ -220,7 +220,7 @@ SellerRepository::save($sellerId, [
     'merchant_account' => 'integration-merchant',
     'merchant_domain' => (string) wp_parse_url(home_url('/'), PHP_URL_HOST),
     'card_enabled' => 1,
-    'iban_enabled' => 0,
+    'iban_enabled' => 1,
     'secret_plaintext' => $rotatedSecret,
     'operator_checked' => false,
 ], SecretStore::encrypt($rotatedSecret), $adminId);
@@ -513,4 +513,114 @@ wfpms_callback_integration_assert($distinctAttemptsPurchase !== null
     )) === 1,
     'The scheduled execution pays once and a duplicate execution action is ignored.');
 
+// Only disposable fixtures change their clock; operators must wait for the original deadline.
+$expiryCalls = 0;
+$expiryCompleted = 0;
+$expiryOrderIds = [];
+add_action('woocommerce_payment_complete', static function (int $id) use (&$expiryCalls, &$expiryOrderIds): void {
+    if (in_array($id, $expiryOrderIds, true)) { $expiryCalls++; }
+});
+add_action('woocommerce_order_status_completed', static function (int $id) use (&$expiryCompleted, &$expiryOrderIds): void {
+    if (in_array($id, $expiryOrderIds, true)) { $expiryCompleted++; }
+});
+[$untouchedOrder, $untouchedPurchase] = $createAttempt();
+$past = gmdate('Y-m-d H:i:s', time() - 60);
+$wpdb->update(PurchaseRepository::purchases_table(), ['expires_at' => $past], ['id' => (int) $untouchedPurchase['id']]);
+foreach (['card', 'card_declined', 'card_expired', 'iban'] as $channel) {
+    if (str_starts_with($channel, 'card')) {
+        [$expiryOrder, $expiryPurchase, $expiryAttempt] = $createAttempt();
+        if ($channel !== 'card') {
+            $sendApproved($expiryAttempt, (string) $expiryAttempt['expected_amount'], (string) $expiryAttempt['currency'],
+                'BEFORE-EXPIRY', null, null, $channel === 'card_declined' ? 'Declined' : 'Expired');
+        }
+    } else {
+        $expiryOrder = wc_create_order();
+        $expiryOrder->add_product($product, 1);
+        $expiryOrder->set_payment_method('wfpms_iban');
+        $expiryOrder->calculate_totals();
+        $expiryOrder->save();
+        $ibanResult = WC()->payment_gateways()->payment_gateways()['wfpms_iban']->process_payment((int) $expiryOrder->get_id());
+        wfpms_callback_integration_assert(($ibanResult['result'] ?? '') === 'success', 'Expiry IBAN fixture issues a real attempt.');
+        $expiryPurchase = PurchaseRepository::for_order((int) $expiryOrder->get_id());
+        $expiryOrder->update_status('cancelled'); // The actual staging IBAN condition.
+    }
+    $expiryId = (int) $expiryPurchase['id'];
+    $expiryOrderIds[] = (int) $expiryOrder->get_id();
+    $notDue = PurchaseExecutionService::expire_unpaid_purchase($expiryId);
+    wfpms_callback_integration_assert($notDue['reason'] === 'not_due', 'Targeted expiry cannot close before the pinned deadline.');
+    $wpdb->update(PurchaseRepository::purchases_table(), ['expires_at' => $past], ['id' => $expiryId]);
+    $before = PurchaseRepository::for_order((int) $expiryOrder->get_id());
+    $attemptsBefore = PurchaseRepository::attempts_for_purchase($expiryId);
+    $configsBefore = array_map(static fn(array $a) => SellerRepository::config((int) $a['config_id']), $attemptsBefore);
+    $preview = PurchaseExecutionService::expire_unpaid_purchase($expiryId);
+    wfpms_callback_integration_assert($preview['eligible'] && $preview['result'] === 'preview'
+        && PurchaseRepository::for_order((int) $expiryOrder->get_id()) === $before
+        && PurchaseRepository::attempts_for_purchase($expiryId) === $attemptsBefore,
+        'Dry-run returns an eligible locked preview without modifying purchase or attempts.');
+    $applied = PurchaseExecutionService::expire_unpaid_purchase($expiryId, false, $preview['preview_hash']);
+    wfpms_callback_integration_assert($applied['result'] === 'expired'
+        && PurchaseRepository::for_order((int) $expiryOrder->get_id())['state'] === 'expired'
+        && wc_get_order((int) $expiryOrder->get_id())->get_status() === 'cancelled',
+        'Addressed ' . $channel . ' expiry closes only the unpaid due purchase.');
+    foreach (PurchaseRepository::attempts_for_purchase($expiryId) as $index => $a) {
+        $original = $attemptsBefore[$index];
+        $original['status'] = $original['status'] === 'issued' ? 'expired' : $original['status'];
+        wfpms_callback_integration_assert($a === $original
+            && SellerRepository::config((int) $a['config_id']) === $configsBefore[$index],
+            'Expiry preserves every reference, pinned credential, payload and historical config.');
+    }
+    $repeat = PurchaseExecutionService::expire_unpaid_purchase($expiryId);
+    wfpms_callback_integration_assert(PurchaseExecutionService::expire_unpaid_purchase($expiryId, false, $repeat['preview_hash'])['result'] === 'already_expired'
+        && (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM ' . PurchaseRepository::events_table()
+            . ' WHERE purchase_id=%d AND kind=%s', $expiryId, 'payment_deadline_expired')) === 1,
+        'Repeated addressed expiry preserves one deadline event.');
+    if (str_starts_with($channel, 'card')) {
+        $sendApproved($expiryAttempt, (string) $expiryAttempt['expected_amount'], (string) $expiryAttempt['currency'], 'LATE-AFTER-ADDRESSSED-EXPIRY');
+        $sendApproved($expiryAttempt, (string) $expiryAttempt['expected_amount'], (string) $expiryAttempt['currency'], 'LATE-AFTER-ADDRESSSED-EXPIRY');
+        $fresh = PurchaseRepository::for_order((int) $expiryOrder->get_id());
+        wfpms_callback_integration_assert($fresh['state'] === 'review' && (int) $fresh['accepted_receipt_id'] === 0
+            && $fresh['execution_state'] === 'none'
+            && (int) $wpdb->get_var($wpdb->prepare('SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table()
+                . ' WHERE purchase_id=%d AND classification=%s', $expiryId, 'needs_review')) === 1,
+            'Late authentic Approved is retained once for manual review after targeted closure.');
+    }
+    PurchaseExecutionService::run($expiryId);
+    PurchaseExecutionService::run($expiryId);
+}
+wfpms_callback_integration_assert($expiryCalls === 0 && $expiryCompleted === 0
+    && PurchaseRepository::for_order((int) $untouchedOrder->get_id())['state'] === 'awaiting_payment',
+    'Targeted expiry and late callbacks cause zero completion and leave unrelated due purchases alone.');
+echo "PASS: addressed card/IBAN expiry, read-only locked preview, immutable history, repeat idempotence, late HTTP Approved review and zero completion.\n";
+
+[$raceOrder, $racePurchase, $raceAttempt] = $createAttempt();
+$racePreview = PurchaseExecutionService::expire_unpaid_purchase((int) $racePurchase['id']);
+$sendApproved($raceAttempt, (string) $raceAttempt['expected_amount'], (string) $raceAttempt['currency'], 'PAID-BETWEEN-PREVIEW-APPLY');
+$raceApply = PurchaseExecutionService::expire_unpaid_purchase((int) $racePurchase['id'], false, $racePreview['preview_hash']);
+wfpms_callback_integration_assert(!$raceApply['eligible'] && $raceApply['reason'] === 'preview_changed'
+    && PurchaseRepository::for_order((int) $raceOrder->get_id())['state'] === 'paid',
+    'A payment between preview and apply blocks stale closure under the order lock.');
+// Explicitly exercise each financial guard on synthetic inconsistent rows.
+foreach (['receipt', 'accepted', 'execution', 'started'] as $guard) {
+    [$guardOrder, $guardPurchase, $guardAttempt] = $createAttempt();
+    $guardId = (int) $guardPurchase['id'];
+    $wpdb->update(PurchaseRepository::purchases_table(), ['expires_at' => $past], ['id' => $guardId]);
+    if ($guard === 'receipt') {
+        $sendApproved($guardAttempt, '9999.99', (string) $guardAttempt['currency'], 'GUARD-REVIEW');
+        $wpdb->update(PurchaseRepository::purchases_table(), ['state' => 'awaiting_payment'], ['id' => $guardId]);
+    } else {
+        $change = match ($guard) {
+            'accepted' => ['accepted_receipt_id' => 999999],
+            'execution' => ['execution_state' => 'pending'],
+            'started' => ['execution_started_at' => $past],
+        };
+        $wpdb->update(PurchaseRepository::purchases_table(), $change, ['id' => $guardId]);
+    }
+    $guardPreview = PurchaseExecutionService::expire_unpaid_purchase($guardId);
+    $guardBefore = PurchaseRepository::for_order((int) $guardOrder->get_id());
+    $guardApply = PurchaseExecutionService::expire_unpaid_purchase($guardId, false, $guardPreview['preview_hash']);
+    wfpms_callback_integration_assert(!$guardApply['eligible'] && $guardApply['reason'] === 'financial_or_execution_evidence'
+        && PurchaseRepository::for_order((int) $guardOrder->get_id()) === $guardBefore,
+        'Addressed expiry refuses ' . $guard . ' evidence and performs no financial mutation.');
+}
+echo "PASS: expiry rejects stale previews, receipts, accepted receipt IDs and pending/previous execution under the order lock.\n";
 echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, same-attempt conflict exceptions, credential rotation, amount and currency mismatches, terminal-status protection, distinct-attempt review, and one-time WooCommerce payment completion.\n";

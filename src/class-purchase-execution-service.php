@@ -269,56 +269,117 @@ final class PurchaseExecutionService
             current_time('mysql', true), 'awaiting_payment'
         ), ARRAY_A);
         foreach (is_array($rows) ? $rows : [] as $row) {
-            $orderId = (int) $row['order_id'];
-            if (!PurchaseRepository::order_lock($orderId)) {
-                continue;
+            self::expire_unpaid_purchase((int) $row['id'], false);
+        }
+    }
+
+    /** Preview or expire one due, wholly unpaid purchase; never runs the recovery queue.
+     * A supplied preview hash must still match the fresh evidence under the order lock.
+     * @return array<string,mixed> No secrets or provider payloads are returned.
+     */
+    public static function expire_unpaid_purchase(int $purchaseId, bool $dryRun = true, ?string $previewHash = null): array
+    {
+        global $wpdb;
+        $result = ['purchase_id' => $purchaseId, 'eligible' => false, 'result' => 'blocked', 'reason' => 'purchase_missing'];
+        $initial = self::purchase_by_id($purchaseId);
+        if ($initial === null) {
+            return $result;
+        }
+        $orderId = (int) $initial['order_id'];
+        if (!PurchaseRepository::order_lock($orderId)) {
+            return array_replace($result, ['reason' => 'order_lock_failed']);
+        }
+        try {
+            if ($wpdb->query('START TRANSACTION') === false) {
+                throw new \RuntimeException('Could not start expiry transaction.');
+            }
+            $purchase = PurchaseRepository::for_order($orderId, true);
+            if ($purchase === null || (int) $purchase['id'] !== $purchaseId) {
+                $wpdb->query('ROLLBACK');
+                return $result;
+            }
+            $receiptCount = $wpdb->get_var($wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d', $purchaseId
+            ));
+            $eventCount = $wpdb->get_var($wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d', $purchaseId
+            ));
+            $executionEvents = $wpdb->get_var($wpdb->prepare(
+                'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table()
+                . ' WHERE purchase_id=%d AND kind LIKE %s',
+                $purchaseId, $wpdb->esc_like('execution_') . '%'
+            ));
+            if ($receiptCount === null || $eventCount === null || $executionEvents === null) {
+                throw new \RuntimeException('Could not read expiry evidence.');
+            }
+            $order = wc_get_order($orderId);
+            $result += [
+                'order_id' => $orderId, 'state' => (string) $purchase['state'],
+                'expires_at' => $purchase['expires_at'], 'receipts' => (int) $receiptCount,
+                'accepted_receipt_id' => (int) $purchase['accepted_receipt_id'],
+                'execution_state' => (string) $purchase['execution_state'],
+                'execution_started_at' => $purchase['execution_started_at'],
+                'execution_events' => (int) $executionEvents, 'events' => (int) $eventCount,
+                'woo_status' => $order instanceof \WC_Order ? $order->get_status() : 'missing',
+                'woo_paid_at' => $order instanceof \WC_Order && $order->get_date_paid() ? $order->get_date_paid()->getTimestamp() : null,
+            ];
+            $result['preview_hash'] = hash('sha256', (string) wp_json_encode([
+                $purchase, $result, PurchaseRepository::attempts_for_purchase($purchaseId),
+            ]));
+            $reason = '';
+            if ($previewHash !== null && !hash_equals($result['preview_hash'], $previewHash)) {
+                $reason = 'preview_changed';
+            } elseif ($receiptCount != 0 || (int) $purchase['accepted_receipt_id'] !== 0
+                || (string) $purchase['execution_state'] !== 'none' || !empty($purchase['execution_started_at'])
+                || !empty($purchase['execution_token']) || $executionEvents != 0 || self::is_financially_accepted($purchase)) {
+                $reason = 'financial_or_execution_evidence';
+            } elseif (!$order instanceof \WC_Order || !in_array($order->get_status(), ['pending', 'on-hold', 'cancelled'], true)
+                || $order->get_date_paid() !== null) {
+                $reason = 'order_not_unpaid';
+            } elseif (!in_array((string) $purchase['state'], ['awaiting_payment', 'expired'], true)) {
+                $reason = 'purchase_not_awaiting';
+            } elseif (empty($purchase['expires_at']) || (string) $purchase['expires_at'] > current_time('mysql', true)) {
+                $reason = 'not_due';
+            }
+            $result['reason'] = $reason;
+            $result['eligible'] = $reason === '';
+            if ($dryRun || $reason !== '') {
+                $wpdb->query('ROLLBACK');
+                $result['result'] = $reason === '' ? 'preview' : 'blocked';
+                return $result;
+            }
+            $alreadyExpired = (string) $purchase['state'] === 'expired';
+            if (!$alreadyExpired) {
+                if ($wpdb->update(PurchaseRepository::purchases_table(), [
+                    'state' => 'expired', 'updated_at' => current_time('mysql', true),
+                ], ['id' => $purchaseId]) === false
+                    || $wpdb->query($wpdb->prepare(
+                        'UPDATE ' . PurchaseRepository::attempts_table() . ' SET status=%s WHERE purchase_id=%d AND status=%s',
+                        'expired', $purchaseId, 'issued'
+                    )) === false
+                    || !self::append_event($purchaseId, 'payment_deadline_expired', [
+                        'expires_at' => (string) $purchase['expires_at'],
+                    ], 'deadline:' . $purchaseId . ':' . (string) $purchase['expires_at'])) {
+                    throw new \RuntimeException('Could not persist purchase expiry.');
+                }
+            }
+            if ($wpdb->query('COMMIT') === false) {
+                throw new \RuntimeException('Could not commit purchase expiry.');
             }
             try {
-                if ($wpdb->query('START TRANSACTION') === false) {
-                    continue;
+                if (in_array($order->get_status(), ['pending', 'on-hold'], true)) {
+                    $order->update_status('cancelled', __('Строк очікування оплати минув.', 'wayforpay-multi-seller'), true);
                 }
-                $purchase = PurchaseRepository::for_order($orderId, true);
-                if ($purchase === null || (int) $purchase['id'] !== (int) $row['id']
-                    || !in_array((string) $purchase['state'], ['awaiting_payment', 'expired'], true)
-                    || empty($purchase['expires_at']) || (string) $purchase['expires_at'] > current_time('mysql', true)) {
-                    $wpdb->query('ROLLBACK');
-                    continue;
-                }
-                if ((string) $purchase['state'] === 'awaiting_payment') {
-                    if ($wpdb->update(PurchaseRepository::purchases_table(), [
-                        'state' => 'expired',
-                        'updated_at' => current_time('mysql', true),
-                    ], ['id' => (int) $purchase['id']]) === false) {
-                        $wpdb->query('ROLLBACK');
-                        continue;
-                    }
-                    $attemptsUpdated = $wpdb->query($wpdb->prepare(
-                        'UPDATE ' . PurchaseRepository::attempts_table() . ' SET status=%s WHERE purchase_id=%d AND status=%s',
-                        'expired', (int) $purchase['id'], 'issued'
-                    ));
-                    if ($attemptsUpdated === false || !self::append_event((int) $purchase['id'], 'payment_deadline_expired', [
-                        'expires_at' => (string) $purchase['expires_at'],
-                    ], 'deadline:' . (int) $purchase['id'] . ':' . (string) $purchase['expires_at'])) {
-                        $wpdb->query('ROLLBACK');
-                        continue;
-                    }
-                }
-                if ($wpdb->query('COMMIT') === false) {
-                    $wpdb->query('ROLLBACK');
-                    continue;
-                }
-
-                $order = wc_get_order($orderId);
-                if ($order instanceof \WC_Order && in_array($order->get_status(), ['pending', 'on-hold'], true)) {
-                    try {
-                        $order->update_status('cancelled', __('Строк очікування оплати минув.', 'wayforpay-multi-seller'), true);
-                    } catch (\Throwable $error) {
-                        self::mark_execution_review((int) $purchase['id'], 'expiry_cancel_failed');
-                    }
-                }
-            } finally {
-                PurchaseRepository::release_order_lock($orderId);
+            } catch (\Throwable $error) {
+                self::mark_execution_review($purchaseId, 'expiry_cancel_failed');
+                return array_replace($result, ['eligible' => false, 'result' => 'error', 'reason' => 'expiry_cancel_failed']);
             }
+            return array_replace($result, ['result' => $alreadyExpired ? 'already_expired' : 'expired']);
+        } catch (\Throwable $error) {
+            $wpdb->query('ROLLBACK');
+            return array_replace($result, ['eligible' => false, 'result' => 'error', 'reason' => 'database_unavailable']);
+        } finally {
+            PurchaseRepository::release_order_lock($orderId);
         }
     }
 

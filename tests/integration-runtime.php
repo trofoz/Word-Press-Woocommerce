@@ -371,6 +371,7 @@ for ($index = 1; $index <= 100; $index++) {
 }
 $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'state' => 'awaiting_payment',
+    'execution_state' => 'none',
     'expires_at' => $expiredAt,
     'updated_at' => $expiredAt,
 ], ['id' => (int) $purchase['id']]);
