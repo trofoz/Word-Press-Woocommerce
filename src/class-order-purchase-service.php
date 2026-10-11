@@ -6,12 +6,9 @@ namespace WfpMultiSeller;
 /** Builds a trusted seller snapshot from a finalized WooCommerce order. */
 final class OrderPurchaseService
 {
-    private static ?int $validatedOrderPayId = null;
-
     public static function boot(): void
     {
         add_action('wp', [self::class, 'prepare_order_pay_checkout'], 1, 1);
-        add_filter('pre_render_block', [self::class, 'render_order_pay_checkout_block'], 1, 3);
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
@@ -208,7 +205,6 @@ final class OrderPurchaseService
         if (!$order instanceof \WC_Order || !hash_equals($order->get_order_key(), $key)) {
             return;
         }
-        self::$validatedOrderPayId = $orderId;
         if (is_object($wp)) {
             $wp->query_vars['order-pay'] = $orderId;
         }
@@ -218,26 +214,6 @@ final class OrderPurchaseService
                 $post->post_content = '[woocommerce_checkout]';
             }
         }
-    }
-
-    /** Render the classic pay form inside block themes whose checkout block omits order-pay. */
-    public static function render_order_pay_checkout_block($preRender, array $parsedBlock, $parentBlock = null)
-    {
-        if (self::$validatedOrderPayId === null || !function_exists('get_the_ID')
-            || get_the_ID() !== wc_get_page_id('checkout')) {
-            return $preRender;
-        }
-        if (!headers_sent()) {
-            header('X-WFPMS-Render-Block: ' . rawurlencode(wp_json_encode([
-                'block' => (string) ($parsedBlock['blockName'] ?? ''),
-                'pre_render' => $preRender !== null,
-            ])));
-        }
-        if ($preRender !== null || ($parsedBlock['blockName'] ?? '') !== 'core/post-content') {
-            return $preRender;
-        }
-        $rendered = do_shortcode('[woocommerce_checkout]');
-        return $rendered;
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string

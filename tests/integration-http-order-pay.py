@@ -67,7 +67,6 @@ for checkout_kind in ("classic_order_id", "blocks_order_id"):
         raise RuntimeError(
             f"Order-pay page for {order_id} does not show the frozen legal recipient; "
             f"final URL={response.geturl()}; markers={excerpts!r}; "
-            f"render-block={response.headers.get('X-WFPMS-Render-Block')!r}; "
             f"states={{{', '.join(repr(marker)+': '+str(marker.lower() in visible_text.lower()) for marker in state_markers)}}}; "
             f"forms={forms!r}; visible_text={visible_text[:500]!r}"
         )
