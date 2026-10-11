@@ -24,6 +24,7 @@ final class LegacyMigration
         add_action('admin_menu', [self::class, 'register_page']);
         add_action('admin_post_wfpms_import_legacy_merchant', [self::class, 'import_merchant']);
         add_action('admin_post_wfpms_claim_legacy_callback', [self::class, 'claim_callback_route']);
+        add_action('admin_post_wfpms_release_legacy_callback', [self::class, 'release_callback_route']);
         add_action('admin_post_wfpms_migrate_legacy_order', [self::class, 'migrate_order']);
         add_action('admin_post_wfpms_enable_legacy_transition', [self::class, 'enable_transition']);
         add_action('admin_post_wfpms_enable_standalone_mode', [self::class, 'enable_standalone_mode']);
@@ -233,9 +234,11 @@ final class LegacyMigration
             'already_imported' => __('Ці самі параметри вже імпортовано до цього продавця.', 'wayforpay-multi-seller'),
             'order_migrated' => __('Замовлення прив’язано до продавця та зафіксовано фінансовий знімок.', 'wayforpay-multi-seller'),
             'callback_owned' => __('Форк обробляє callback мігрованих замовлень, а інші передає оригінальному шлюзу. Чинний checkout працює до завершення переходу.', 'wayforpay-multi-seller'),
+            'callback_released' => __('Історичний callback повернено оригіналу. Нові оплати форку працюють у standalone режимі; фінансові записи збережено.', 'wayforpay-multi-seller'),
+            'callback_release_blocked' => __('Повернення callback заблоковано: перевірте підтвердження дії, завершення всіх прив’язаних покупок і відповідність історичного мерчанта та ключа налаштуванням оригіналу. Невирішені покупки залишаються у форку.', 'wayforpay-multi-seller'),
             'transition_enabled' => __('Нові платежі форку увімкнено; невідомі форку старі callback передаються оригінальному шлюзу, який має лишатися активним.', 'wayforpay-multi-seller'),
             'standalone_enabled' => __('Standalone режим увімкнено. Нові оплати використовують профілі продавців; старі способи оплати лишаються доступними для товарів без продавця.', 'wayforpay-multi-seller'),
-            'standalone_blocked' => __('Standalone режим недоступний, доки активний оригінальний WayForPay, збережені його налаштування або форк уже володіє legacy callback.', 'wayforpay-multi-seller'),
+            'standalone_blocked' => __('Standalone режим недоступний, доки форк володіє legacy callback або завершений legacy-перехід.', 'wayforpay-multi-seller'),
             'settings_missing' => __('Не знайдено повні налаштування оригінального шлюзу (merchant_account, secret_key).', 'wayforpay-multi-seller'),
             'seller_required' => __('Оберіть продавця з перевіреною юридичною особою та реквізитами.', 'wayforpay-multi-seller'),
             'domain_required' => __('Вкажіть домен мерчанта й підтвердьте його в кабінеті WayForPay.', 'wayforpay-multi-seller'),
@@ -246,7 +249,7 @@ final class LegacyMigration
             'transition_orders_unmigrated' => __('Перехід не завершено: спершу прив’яжіть до продавців усі відкриті неоплачені замовлення старого шлюзу. Перехід залишився вимкненим.', 'wayforpay-multi-seller'),
         ];
         if (isset($messages[$notice])) {
-            $success = in_array($notice, ['imported', 'already_imported', 'order_migrated', 'transition_enabled', 'standalone_enabled'], true);
+            $success = in_array($notice, ['imported', 'already_imported', 'order_migrated', 'callback_owned', 'callback_released', 'transition_enabled', 'standalone_enabled'], true);
             echo '<div class="notice ' . esc_attr($success ? 'notice-success' : 'notice-error') . '"><p>' . esc_html($messages[$notice]) . '</p></div>';
         }
 
@@ -274,14 +277,17 @@ final class LegacyMigration
                 : __('Режим налаштування: чинний шлюз і checkout збережені', 'wayforpay-multi-seller'));
         echo '<tr><th>' . esc_html__('Стан переходу', 'wayforpay-multi-seller') . '</th><td>'
             . esc_html($transitionLabel) . '</td></tr></tbody></table>';
+        echo '<p>' . esc_html__('Власник історичного маршруту', 'wayforpay-multi-seller') . ': <strong>'
+            . esc_html(self::owns_callback_route() ? __('Форк', 'wayforpay-multi-seller') : __('Оригінальний WayForPay', 'wayforpay-multi-seller'))
+            . '</strong>; <code>/?wc-api=WC_wayforpay</code>. '
+            . esc_html(self::upstream_callback_is_registered() ? __('Обробник оригіналу зареєстрований.', 'wayforpay-multi-seller') : __('Обробник оригіналу відсутній.', 'wayforpay-multi-seller')) . '</p>';
+        echo '<p>' . esc_html__('Діагностика відхилених історичних повідомлень: WooCommerce → Статус → Журнали, джерело wfpms-legacy. Журнал не підтверджує надходження коштів.', 'wayforpay-multi-seller') . '</p>';
 
         if (self::is_standalone_enabled()) {
             echo '<h2>' . esc_html__('Standalone режим', 'wayforpay-multi-seller') . '</h2>';
-            echo '<p>' . esc_html__('Плагін працює без оригінального WayForPay. Щоб приймати оплату, створіть профілі продавців, налаштуйте реквізити й призначте товари.', 'wayforpay-multi-seller') . '</p>';
-            echo '</div>';
-            return;
+            echo '<p>' . esc_html__('Нові оплати працюють через профілі продавців. Legacy-перехід налаштовується окремо й не потребує вимкнення standalone режиму.', 'wayforpay-multi-seller') . '</p>';
         }
-        if (!self::is_legacy_transition_enabled() && !self::owns_callback_route()) {
+        if (!self::is_transition_enabled() && !self::owns_callback_route()) {
             echo '<h2>' . esc_html__('Самостійний запуск', 'wayforpay-multi-seller') . '</h2>';
             echo '<p>' . esc_html__('Увімкніть окремий standalone режим, щоб приймати нові оплати через профілі продавців без імпорту старого мерчанта. Налаштування не змінюють власника історичного callback: старий маршрут залишається оригінальному плагіну.', 'wayforpay-multi-seller') . '</p>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_enable_standalone_mode">';
@@ -289,8 +295,7 @@ final class LegacyMigration
             echo '<p><label><input type="checkbox" name="confirm_standalone" value="1" required> '
                 . esc_html__('Підтверджую запуск нових оплат через профілі продавців.', 'wayforpay-multi-seller') . '</label></p>';
             submit_button(__('Увімкнути standalone режим', 'wayforpay-multi-seller'));
-            echo '</form></div>';
-            return;
+            echo '</form>';
         }
 
         echo '<h2>' . esc_html__('Імпорт мерчанта у профіль продавця', 'wayforpay-multi-seller') . '</h2>';
@@ -321,7 +326,7 @@ final class LegacyMigration
             echo '<p><label><input type="checkbox" name="confirm_callback_owner" value="1" required> ' . esc_html__('Підтверджую, що переглянув відкриті старі замовлення та готовий передати обробку їхніх callback форку.', 'wayforpay-multi-seller') . '</label></p>';
             submit_button(__('Підготувати обробку callback форком', 'wayforpay-multi-seller'));
             echo '</form>';
-        } elseif (!self::is_transition_enabled()) {
+        } elseif (!self::is_legacy_transition_enabled()) {
             echo '<p>' . esc_html__('Чинний шлюз продовжує обробляти замовлення без міграційного запису; callback мігрованих замовлень приймає форк. Прив’яжіть потрібні відкриті замовлення, перевірте профілі й лише тоді завершіть перемикання.', 'wayforpay-multi-seller') . '</p>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_enable_legacy_transition">';
             wp_nonce_field('wfpms_enable_legacy_transition');
@@ -330,6 +335,16 @@ final class LegacyMigration
             echo '</form>';
         } else {
             echo '<p>' . esc_html__('Перехід завершений. Оригінальний gateway не показується покупцям. Callback мігрованих замовлень обробляє форк, а інші чинні старі reference передаються оригінальному gateway. Залишайте оригінальний плагін WayForPay активним до завершення всіх старих платежів.', 'wayforpay-multi-seller') . '</p>';
+        }
+        if (self::owns_callback_route()) {
+            echo '<hr><h2>' . esc_html__('Повернення історичного callback оригіналу', 'wayforpay-multi-seller') . '</h2>';
+            echo '<p>' . esc_html__('Спершу активуйте оригінальний плагін. Повернення дозволено лише після прийняття й виконання всіх прив’язаних покупок, із відповідними історичними ключами в оригіналі. Нові шлюзи й записи форку зберігаються; режим нових оплат стає standalone.', 'wayforpay-multi-seller') . '</p>';
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_release_legacy_callback">';
+            wp_nonce_field('wfpms_release_legacy_callback');
+            echo '<p><label><input type="checkbox" name="confirm_release" value="1" required> '
+                . esc_html__('Підтверджую повернення callback перевіреному обробнику оригіналу.', 'wayforpay-multi-seller') . '</label></p>';
+            submit_button(__('Повернути callback оригіналу', 'wayforpay-multi-seller'));
+            echo '</form>';
         }
         echo '</div>';
     }
@@ -466,13 +481,18 @@ final class LegacyMigration
         $orderId = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
         self::authorize_post('wfpms_migrate_legacy_order_' . $orderId);
         $sellerId = isset($_POST['seller_id']) ? absint($_POST['seller_id']) : 0;
+        // Order zero is reserved for serializing operator changes to legacy route ownership.
+        if (!PurchaseRepository::order_lock(0)) self::redirect('order_failed');
+        $notice = 'order_failed';
         try {
             OrderPurchaseService::migrate_legacy_order($orderId, $sellerId, get_current_user_id());
-            self::redirect('order_migrated');
+            $notice = 'order_migrated';
         } catch (\Throwable $error) {
             error_log('WFPMS legacy order migration failed: ' . sanitize_text_field($error->getMessage()));
-            self::redirect('order_failed');
+        } finally {
+            PurchaseRepository::release_order_lock(0);
         }
+        self::redirect($notice);
     }
 
     public static function claim_callback_route(): void
@@ -487,8 +507,65 @@ final class LegacyMigration
         if (!self::upstream_callback_is_registered()) {
             self::redirect('callback_unavailable');
         }
-        update_option(self::CALLBACK_OWNER_OPTION, 'yes', false);
+        if (!PurchaseRepository::order_lock(0)) self::redirect('transition_blocked');
+        try {
+            update_option(self::CALLBACK_OWNER_OPTION, 'yes', false);
+        } finally {
+            PurchaseRepository::release_order_lock(0);
+        }
         self::redirect('callback_owned');
+    }
+
+    /** Return only settled mapped purchases to upstream's native completion rules. */
+    public static function release_callback_route(): void
+    {
+        global $wpdb;
+        self::authorize_post('wfpms_release_legacy_callback');
+        if (!isset($_POST['confirm_release'])) self::redirect('callback_release_blocked');
+        if (!self::upstream_callback_is_registered()) self::redirect('callback_unavailable');
+        if (!PurchaseRepository::order_lock(0)) self::redirect('callback_release_blocked');
+        $lockedOrders = [];
+        $notice = 'callback_release_blocked';
+        try {
+            $settings = self::legacy_settings();
+            $mappings = $wpdb->get_results('SELECT * FROM ' . self::migrations_table() . ' ORDER BY order_id', ARRAY_A);
+            if (!is_array($mappings) || $wpdb->last_error !== '' || $settings === null) {
+                throw new \RuntimeException('Legacy configuration or mappings unavailable.');
+            }
+            foreach ($mappings as $mapping) {
+                $orderId = (int) $mapping['order_id'];
+                if (!PurchaseRepository::order_lock($orderId)) throw new \RuntimeException('Legacy order busy.');
+                $lockedOrders[] = $orderId;
+                $purchase = PurchaseRepository::for_order($orderId);
+                $order = wc_get_order($orderId);
+                $config = SellerRepository::config((int) $mapping['config_id']);
+                $secret = $config ? SecretStore::decrypt((string) $config['secret_ciphertext']) : null;
+                if ($purchase === null || (int) $purchase['id'] !== (int) $mapping['purchase_id']
+                    || (int) $purchase['config_id'] !== (int) $mapping['config_id']
+                    || (int) $purchase['seller_id'] !== (int) $mapping['seller_id']
+                    || (string) $purchase['state'] !== 'paid' || (string) $purchase['execution_state'] !== 'done'
+                    || !PurchaseExecutionService::is_financially_accepted($purchase)
+                    || !$order instanceof \WC_Order || !$order->is_paid()
+                    || $config === null || $secret === null
+                    || (int) $config['seller_id'] !== (int) $mapping['seller_id']
+                    || !hash_equals((string) $config['merchant_account'], $settings['merchant_account'])
+                    || !hash_equals($secret, $settings['secret_key'])) {
+                    throw new \RuntimeException('Unsettled mapped purchase or incompatible upstream credential.');
+                }
+            }
+            // Preserve availability of new fork payments; never erase imports, mappings, or money records.
+            if (self::is_transition_enabled()) update_option(self::STANDALONE_OPTION, 'yes', false);
+            update_option(self::TRANSITION_OPTION, 'no', false);
+            update_option(self::CALLBACK_OWNER_OPTION, 'no', false);
+            wc_get_logger()->info('callback_owner_restored', ['source' => 'wfpms-legacy', 'actor_id' => get_current_user_id()]);
+            $notice = 'callback_released';
+        } catch (\Throwable $error) {
+            wc_get_logger()->warning('callback_ownership_return_blocked', ['source' => 'wfpms-legacy', 'actor_id' => get_current_user_id()]);
+        } finally {
+            foreach (array_reverse($lockedOrders) as $orderId) PurchaseRepository::release_order_lock($orderId);
+            PurchaseRepository::release_order_lock(0);
+        }
+        self::redirect($notice);
     }
 
     public static function enable_transition(): void
@@ -497,21 +574,21 @@ final class LegacyMigration
         if (!isset($_POST['confirm_transition'])) {
             self::redirect('transition_blocked');
         }
-        if (!self::upstream_callback_is_registered()) {
-            self::redirect('callback_unavailable');
-        }
-        if (!self::transition_is_ready()) {
-            $unmappedOrders = self::unmigrated_open_order_ids();
-            if ($unmappedOrders === null) {
-                self::redirect('transition_blocked');
+        if (!PurchaseRepository::order_lock(0)) self::redirect('transition_blocked');
+        $notice = 'transition_blocked';
+        try {
+            if (!self::upstream_callback_is_registered()) {
+                $notice = 'callback_unavailable';
+            } elseif (self::transition_is_ready()) {
+                update_option(self::TRANSITION_OPTION, 'yes', false);
+                $notice = 'transition_enabled';
+            } elseif (self::unmigrated_open_order_ids()) {
+                $notice = 'transition_orders_unmigrated';
             }
-            if ($unmappedOrders !== []) {
-                self::redirect('transition_orders_unmigrated');
-            }
-            self::redirect('transition_blocked');
+        } finally {
+            PurchaseRepository::release_order_lock(0);
         }
-        update_option(self::TRANSITION_OPTION, 'yes', false);
-        self::redirect('transition_enabled');
+        self::redirect($notice);
     }
 
     public static function enable_standalone_mode(): void
@@ -571,6 +648,7 @@ final class LegacyMigration
         }
         $reference = (string) $data['orderReference'];
         if (preg_match('/\A([1-9][0-9]*)(?:_woo_w4p_[1-9][0-9]*)?\z/', $reference, $matches) !== 1) {
+            self::log_callback_rejection('unsupported_reference', 0, $reference);
             status_header(400);
             exit;
         }
@@ -579,6 +657,7 @@ final class LegacyMigration
         if ($mapping === null) {
             // Preserve the upstream callback path for every legacy order without a fork mapping.
             if (!self::upstream_callback_is_registered()) {
+                self::log_callback_rejection('unmapped_reference_no_upstream', $orderId, $reference);
                 status_header(503);
                 exit;
             }
@@ -602,6 +681,9 @@ final class LegacyMigration
         $order = wc_get_order($orderId);
         $config = SellerRepository::config((int) $mapping['config_id']);
         $secret = $config === null ? null : SecretStore::decrypt((string) $config['secret_ciphertext']);
+        if ($config === null || $secret === null) {
+            self::log_callback_rejection('historical_config_unavailable', $orderId, $reference);
+        }
         if ($purchase === null || !$order instanceof \WC_Order
             || $order->get_payment_method() !== 'wayforpay'
             || (int) $purchase['id'] !== (int) $mapping['purchase_id']
@@ -769,6 +851,14 @@ final class LegacyMigration
             $data['authCode'], $data['cardPan'], $data['transactionStatus'], $data['reasonCode'],
         ]);
         return hash_equals(hash_hmac('md5', implode(';', $fields), $secret), strtolower((string) $data['merchantSignature']));
+    }
+
+    private static function log_callback_rejection(string $reason, int $orderId, string $reference): void
+    {
+        wc_get_logger()->warning($reason, [
+            'source' => 'wfpms-legacy', 'order_id' => $orderId,
+            'reference_hash' => hash('sha256', $reference),
+        ]);
     }
 
     private static function normalize_domain(string $domain): string

@@ -120,6 +120,7 @@ assert inspect()['ready']
 post('wfpms_enable_legacy_transition', {'confirm_transition': 1}, 'transition_enabled')
 assert inspect()['transition'] and inspect()['standalone']
 print('PASS: supported import, claim, order mapping, readiness gate and switch via authenticated HTTP forms', flush=True)
+inspect('rotate_current')
 
 plugin('deactivate')
 try:
@@ -151,6 +152,7 @@ try:
     log_dir = subprocess.check_output(['wp', 'eval', 'echo WC_LOG_DIR;', '--path=' + WP], text=True)
     log_output = ''.join(path.read_text() for path in Path(log_dir).rglob('*wfpms-legacy*.log'))
     assert 'unmapped_reference_no_upstream' in log_output and 'historical_config_unavailable' in log_output, 'Operator diagnostic missing'
+    assert 'synthetic-operator-history-secret' not in log_output and 'synthetic-operator-rotated-secret' not in log_output
     print('PASS: unknown reference HTTP 503, unsupported format HTTP 400; no accepted payment; WooCommerce operator diagnostics present', flush=True)
 finally:
     plugin('activate')
@@ -161,7 +163,7 @@ assert inspect()['owner'] and inspect()['transition']
 print('PASS: ownership return is blocked while mapped financial review/execution is unfinished', flush=True)
 for label in ['numeric', 'suffixed']:
     receipt_id = inspect()[label + '_state']['receipts'][0]['id']
-    post('wfpms_review_receipt', {'receipt_id': receipt_id, 'reason': 'Synthetic legacy evidence reviewed', 'stock_reviewed': 1}, 'reviewed', page='/wp-admin/admin.php?page=wfpms-payments')
+    post('wfpms_review_receipt', {'receipt_id': receipt_id, 'reason': 'Synthetic legacy evidence reviewed', 'stock_reviewed': 1}, 'receipt_reviewed', page='/wp-admin/admin.php?page=wfpms-payments')
     assert inspect('run', fixture[label]) == {'payment_complete': 1, 'completed': 1}
 
 before = inspect()
@@ -171,12 +173,23 @@ assert request('/wp-admin/admin-post.php', urllib.parse.urlencode(bad).encode())
 anonymous = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 assert request('/wp-admin/admin-post.php', urllib.parse.urlencode(dict(release, confirm_release=1)).encode(), anonymous)[0] != 200
 assert inspect()['owner']
+restricted = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+request('/wp-login.php', opener=restricted)
+status, _, url = request('/wp-login.php', urllib.parse.urlencode({
+    'log': 'legacy-no-capability', 'pwd': 'synthetic-subscriber-password',
+    'redirect_to': BASE + '/wp-admin/', 'testcookie': '1',
+}).encode(), restricted)
+assert status == 200 and 'wp-login.php' not in url
+assert request('/wp-admin/admin-post.php', urllib.parse.urlencode(dict(release, confirm_release=1)).encode(), restricted)[0] == 403
+assert inspect()['owner']
 post('wfpms_release_legacy_callback', {'confirm_release': 1}, 'callback_released')
 after = inspect()
 assert not after['owner'] and not after['transition'] and after['standalone'] and after['upstream_registered']
 for label in ['numeric', 'suffixed']:
     assert after[label + '_state'] == before[label + '_state'], 'Return changed mapped history'
-assert callback(payload(str(fixture['unmapped']) + '_woo_w4p_100'))[0] == 200
+returned = inspect('original_payment')
+assert callback(payload(str(returned['unmapped']) + '_woo_w4p_100'))[0] == 200
+assert inspect()['unmapped_state']['status'] == 'completed' and inspect()['unmapped_state']['purchase'] is None
 print('PASS: supported ownership return preserves mapped financial records and restores original handler; nonce and login required', flush=True)
 
 new = inspect('new_payment')

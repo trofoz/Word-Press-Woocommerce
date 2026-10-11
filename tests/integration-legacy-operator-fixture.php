@@ -45,11 +45,13 @@ if ($mode === 'seed') {
         $order = wc_create_order();
         $order->add_product($product, 1);
         $order->set_payment_method('wayforpay');
+        $order->set_currency('UAH');
         $order->calculate_totals();
         $order->save();
         $fixture[$label] = $order->get_id();
     }
     update_option('wfpms_legacy_operator_fixture', $fixture, false);
+    wp_create_user('legacy-no-capability', 'synthetic-subscriber-password', 'legacy-subscriber@example.test');
 } elseif ($mode === 'missing_key' || $mode === 'restore_key') {
     // Fault injection affects only the new synthetic imported configuration in this disposable DB.
     $configId = (int) get_option('wfpms_legacy_import')['config_id'];
@@ -60,10 +62,29 @@ if ($mode === 'seed') {
         $ciphertext = get_option('wfpms_legacy_operator_saved_ciphertext');
     }
     $wpdb->update(SellerRepository::configs_table(), ['secret_ciphertext' => $ciphertext], ['id' => $configId]);
+} elseif ($mode === 'rotate_current') {
+    $seller = SellerRepository::find((int) $fixture['seller_id']);
+    $config = SellerRepository::current_config((int) $fixture['seller_id']);
+    $config['operator_checked'] = true;
+    $config['secret_plaintext'] = 'synthetic-operator-rotated-secret';
+    $config['card_enabled'] = (int) $config['card_enabled'];
+    $config['iban_enabled'] = (int) $config['iban_enabled'];
+    SellerRepository::save((int) $fixture['seller_id'], $seller, $config,
+        SecretStore::encrypt($config['secret_plaintext']), get_current_user_id());
+} elseif ($mode === 'original_payment') {
+    $order = wc_create_order();
+    $order->add_product(wc_get_product((int) $fixture['product_id']), 1);
+    $order->set_payment_method('wayforpay');
+    $order->set_currency('UAH');
+    $order->calculate_totals();
+    $order->save();
+    $fixture['unmapped'] = $order->get_id();
+    update_option('wfpms_legacy_operator_fixture', $fixture, false);
 } elseif ($mode === 'new_payment') {
     $order = wc_create_order();
     $order->add_product(wc_get_product((int) $fixture['product_id']), 1);
     $order->set_payment_method('wfpms_card');
+    $order->set_currency('UAH');
     $order->calculate_totals();
     $order->save();
     $result = WC()->payment_gateways()->payment_gateways()['wfpms_card']->process_payment($order->get_id());
