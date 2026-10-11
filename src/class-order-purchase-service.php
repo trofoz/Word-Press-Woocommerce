@@ -239,6 +239,10 @@ final class OrderPurchaseService
                 'checkout_page' => function_exists('is_page') && is_page(wc_get_page_id('checkout')),
                 'is_checkout' => function_exists('is_checkout') && is_checkout(),
                 'cart_loaded' => function_exists('WC') && WC()->cart !== null,
+                'main_post_shortcode' => isset($wp_query->posts[0]) && $wp_query->posts[0] instanceof \WP_Post
+                    && has_shortcode($wp_query->posts[0]->post_content, 'woocommerce_checkout'),
+                'queried_post_shortcode' => $wp_query->queried_object instanceof \WP_Post
+                    && has_shortcode($wp_query->queried_object->post_content, 'woocommerce_checkout'),
             ];
             header('X-WFPMS-Order-Pay-State: ' . rawurlencode(wp_json_encode($diagnostic)));
         }
