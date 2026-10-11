@@ -223,14 +223,21 @@ final class OrderPurchaseService
     /** Render the classic pay form inside block themes whose checkout block omits order-pay. */
     public static function render_order_pay_checkout_block($preRender, array $parsedBlock, $parentBlock = null)
     {
-        if ($preRender !== null
-            || self::$validatedOrderPayId === null
-            || ($parsedBlock['blockName'] ?? '') !== 'core/post-content'
-            || !function_exists('get_the_ID')
+        if (self::$validatedOrderPayId === null || !function_exists('get_the_ID')
             || get_the_ID() !== wc_get_page_id('checkout')) {
             return $preRender;
         }
-        return do_shortcode('[woocommerce_checkout]');
+        if (!headers_sent()) {
+            header('X-WFPMS-Render-Block: ' . rawurlencode(wp_json_encode([
+                'block' => (string) ($parsedBlock['blockName'] ?? ''),
+                'pre_render' => $preRender !== null,
+            ])));
+        }
+        if ($preRender !== null || ($parsedBlock['blockName'] ?? '') !== 'core/post-content') {
+            return $preRender;
+        }
+        $rendered = do_shortcode('[woocommerce_checkout]');
+        return $rendered;
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string
