@@ -22,6 +22,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
         $this->init_form_fields();
         $this->init_settings();
         $this->title = $this->get_option('title', $this->title);
+        add_action('woocommerce_update_options_payment_gateways_' . $this->id, [$this, 'process_admin_options']);
     }
 
     public static function boot(): void
@@ -411,29 +412,39 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                     $classification = 'status_only';
                     $receiptId = 0;
                     if ($isApproved) {
+                        $priorApprovedEvent = $wpdb->get_var($wpdb->prepare(
+                            'SELECT id FROM ' . PurchaseRepository::events_table()
+                            . ' WHERE purchase_id=%d AND attempt_id=%d AND kind=%s LIMIT 1',
+                            (int) $purchase['id'], (int) $attempt['id'], 'callback_Approved'
+                        ));
                         $prior = (int) $wpdb->get_var($wpdb->prepare(
                             'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
                             (int) $purchase['id']
                         ));
-                        $classification = (!$merchantMatches || !$amountMatch || !$currencyMatch || $closedOrder || !$deadlineOpen || !$snapshotMatches || $prior > 0)
-                            ? 'needs_review' : 'accepted';
-                        $receiptId = PurchaseRepository::insert_receipt([
-                            'purchase_id' => (int) $purchase['id'],
-                            'attempt_id' => (int) $attempt['id'],
-                            'source' => 'wayforpay',
-                            'source_scope' => (string) $attempt['merchant_account'],
-                            'external_id' => hash('sha256', serialize([
-                                'wayforpay', (string) $attempt['merchant_account'], $reference, $eventKey,
-                            ])),
-                            'provider_reference' => $reference,
-                            'amount' => preg_match('/\A\d{1,14}(?:\.\d{1,6})?\z/', (string) $amount) === 1 ? $amount : '0',
-                            'amount_raw' => substr((string) $data['amount'], 0, 191),
-                            'currency' => preg_match('/\A[A-Z]{3}\z/', $currency) === 1 ? $currency : 'XXX',
-                            'transaction_status' => $status,
-                            'classification' => $classification,
-                            'first_event_id' => 0,
-                            'recorded_at' => current_time('mysql', true),
-                        ]);
+                        $sameAttemptConflict = $priorApprovedEvent !== null && $priorApprovedEvent !== false;
+                        $classification = $sameAttemptConflict
+                            ? 'same_attempt_conflict'
+                            : ((!$merchantMatches || !$amountMatch || !$currencyMatch || $closedOrder || !$deadlineOpen || !$snapshotMatches || $prior > 0)
+                                ? 'needs_review' : 'accepted');
+                        if (!$sameAttemptConflict) {
+                            $receiptId = PurchaseRepository::insert_receipt([
+                                'purchase_id' => (int) $purchase['id'],
+                                'attempt_id' => (int) $attempt['id'],
+                                'source' => 'wayforpay',
+                                'source_scope' => (string) $attempt['merchant_account'],
+                                'external_id' => hash('sha256', serialize([
+                                    'wayforpay', (string) $attempt['merchant_account'], $reference, $eventKey,
+                                ])),
+                                'provider_reference' => $reference,
+                                'amount' => preg_match('/\A\d{1,14}(?:\.\d{1,6})?\z/', (string) $amount) === 1 ? $amount : '0',
+                                'amount_raw' => substr((string) $data['amount'], 0, 191),
+                                'currency' => preg_match('/\A[A-Z]{3}\z/', $currency) === 1 ? $currency : 'XXX',
+                                'transaction_status' => $status,
+                                'classification' => $classification,
+                                'first_event_id' => 0,
+                                'recorded_at' => current_time('mysql', true),
+                            ]);
+                        }
                         $hasAcceptedReceipt = $prior > 0
                             && in_array((string) $purchase['state'], ['paid', 'paid_review'], true);
                         $newState = $classification === 'accepted' ? 'paid' : ($hasAcceptedReceipt ? 'paid_review' : 'review');

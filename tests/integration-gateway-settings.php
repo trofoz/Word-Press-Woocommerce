@@ -32,6 +32,19 @@ $enabledIban = new BankTransferGateway();
 wfpms_gateway_settings_assert($enabledCard->enabled === 'yes' && $enabledIban->enabled === 'yes',
     'both gateways respect the explicitly enabled WooCommerce setting');
 
+$previousPost = $_POST;
+foreach ([[$enabledCard, 'wfpms_card', 'Card save test'], [$enabledIban, 'wfpms_iban', 'IBAN save test']] as [$gateway, $gatewayId, $title]) {
+    $saveAction = 'woocommerce_update_options_payment_gateways_' . $gatewayId;
+    wfpms_gateway_settings_assert(has_action($saveAction, [$gateway, 'process_admin_options']) !== false,
+        $gatewayId . ' registers WooCommerce standard settings save handler');
+    $_POST = ['woocommerce_' . $gatewayId . '_title' => $title];
+    do_action($saveAction);
+    $savedSettings = get_option('woocommerce_' . $gatewayId . '_settings', []);
+    wfpms_gateway_settings_assert(is_array($savedSettings) && ($savedSettings['title'] ?? '') === $title,
+        $gatewayId . ' persists its title through the standard WooCommerce save event');
+}
+$_POST = $previousPost;
+
 update_option('wfpms_legacy_transition_enabled', 'yes', false);
 foreach ([[$disabledCard, 'wfpms_card'], [$disabledIban, 'wfpms_iban']] as [$gateway, $gatewayId]) {
     $order = wc_create_order();

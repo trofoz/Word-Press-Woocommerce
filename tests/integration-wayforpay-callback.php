@@ -280,17 +280,25 @@ wfpms_callback_integration_assert($paidPurchase !== null
     && (string) $paidPurchase['state'] === 'paid_review'
     && (string) $paidPurchase['execution_state'] === 'done'
     && (int) $paidPurchase['accepted_receipt_id'] === $firstAcceptedReceiptId
-    && is_array($sameReferenceReceipts) && count($sameReferenceReceipts) === 2
+    && is_array($sameReferenceReceipts) && count($sameReferenceReceipts) === 1
     && (string) $sameReferenceReceipts[0]['provider_reference'] === (string) $paidAttempt['external_reference']
-    && (string) $sameReferenceReceipts[1]['provider_reference'] === (string) $paidAttempt['external_reference']
-    && (string) $sameReferenceReceipts[0]['external_id'] !== (string) $sameReferenceReceipts[1]['external_id']
-    && (string) $sameReferenceReceipts[1]['classification'] === 'needs_review'
+    && (string) $sameReferenceReceipts[0]['classification'] === 'accepted'
     && $distinctEventCount === 2, 'Distinct signed Approved evidence on the same reference is retained for review without changing accepted payment or replaying fulfillment.');
+$conflictEvent = $wpdb->get_row($wpdb->prepare(
+    'SELECT receipt_id,evidence FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND dedupe_key<>%s ORDER BY id DESC LIMIT 1',
+    (int) $paidPurchase['id'], hash('sha256', implode(';', array_map('strval', [
+        'integration-merchant', $paidAttempt['external_reference'], $paidFields['amount'], $paidFields['currency'],
+        'AUTH-TEST', $paidFields['cardPan'], 'Approved', '1100',
+    ])))
+), ARRAY_A);
+wfpms_callback_integration_assert(is_array($conflictEvent) && (int) $conflictEvent['receipt_id'] === 0
+    && str_contains((string) $conflictEvent['evidence'], 'same_attempt_conflict'),
+    'Changed signed callback for the same attempt is stored as an exception without inventing a second receipt.');
 $sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-SECOND', $secret);
 wfpms_callback_integration_assert((int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
     (int) $paidPurchase['id']
-)) === 2, 'Retry of the second signed callback does not duplicate its receipt.');
+)) === 1, 'Retry of the conflicting signed callback does not create a receipt.');
 $sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-TEST', $secret);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null && (string) $paidPurchase['execution_state'] === 'done'
@@ -341,4 +349,4 @@ wfpms_callback_integration_assert($wrongCurrencyPurchase !== null
     && (string) $wrongCurrencyReceipt['currency'] === $wrongCurrency
     && $wrongCurrencyOrder instanceof WC_Order && !$wrongCurrencyOrder->is_paid(), 'Approved callback with the wrong currency is recorded for review and does not pay the order.');
 
-echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";
+echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, same-attempt conflict exceptions, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";

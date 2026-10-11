@@ -84,6 +84,69 @@ final class LegacyMigration
         return get_option(self::CALLBACK_OWNER_OPTION, 'no') === 'yes';
     }
 
+    /** @return list<int>|null IDs that need mapping, or null when WooCommerce cannot return a complete order list. */
+    public static function unmigrated_open_order_ids(): ?array
+    {
+        global $wpdb;
+        $page = 1;
+        $unmapped = [];
+        do {
+            $result = wc_get_orders([
+                'payment_method' => 'wayforpay',
+                'status' => ['pending', 'on-hold'],
+                'limit' => 100,
+                'page' => $page,
+                'paginate' => true,
+                'orderby' => 'date',
+                'order' => 'ASC',
+                'return' => 'objects',
+            ]);
+            if (!is_object($result) || !isset($result->orders) || !is_array($result->orders)) {
+                return null;
+            }
+            $orderIds = [];
+            foreach ($result->orders as $order) {
+                if (!$order instanceof \WC_Order) {
+                    return null;
+                }
+                $orderIds[] = (int) $order->get_id();
+            }
+            if ($orderIds !== []) {
+                $placeholders = implode(',', array_fill(0, count($orderIds), '%d'));
+                $mappedIds = $wpdb->get_col($wpdb->prepare(
+                    'SELECT m.order_id FROM ' . self::migrations_table() . ' m INNER JOIN '
+                    . PurchaseRepository::purchases_table() . ' p ON p.id=m.purchase_id AND p.order_id=m.order_id'
+                    . ' AND p.seller_id=m.seller_id AND p.config_id=m.config_id WHERE m.order_id IN (' . $placeholders . ')',
+                    ...$orderIds
+                ));
+                if (!is_array($mappedIds)) {
+                    return null;
+                }
+                $mappedSet = array_fill_keys(array_map('intval', $mappedIds), true);
+                foreach ($orderIds as $orderId) {
+                    if (!isset($mappedSet[$orderId])) {
+                        $unmapped[] = $orderId;
+                    }
+                }
+            }
+            $maxPages = max(1, (int) ($result->max_num_pages ?? 1));
+            $page++;
+        } while ($page <= $maxPages);
+
+        return $unmapped;
+    }
+
+    public static function transition_is_ready(): bool
+    {
+        $import = get_option(self::IMPORT_OPTION, []);
+        $config = is_array($import) ? SellerRepository::config((int) ($import['config_id'] ?? 0)) : null;
+        return self::owns_callback_route()
+            && $config !== null
+            && (int) $config['seller_id'] === (int) ($import['seller_id'] ?? 0)
+            && self::imported_config_for_seller((int) ($import['seller_id'] ?? 0)) !== null
+            && self::unmigrated_open_order_ids() === [];
+    }
+
     public static function filter_gateways(array $gateways): array
     {
         if (!self::is_transition_enabled()) {
@@ -125,6 +188,7 @@ final class LegacyMigration
             'import_failed' => __('Не вдалося імпортувати параметри. Перевірте ключ шифрування та конфігурацію продавця.', 'wayforpay-multi-seller'),
             'order_failed' => __('Замовлення не мігровано. Перевірте його статус, спосіб оплати, продавця та мерчанта.', 'wayforpay-multi-seller'),
             'transition_blocked' => __('Спершу імпортуйте мерчанта у профіль продавця.', 'wayforpay-multi-seller'),
+            'transition_orders_unmigrated' => __('Перехід не завершено: спершу прив’яжіть до продавців усі відкриті неоплачені замовлення старого шлюзу. Перехід залишився вимкненим.', 'wayforpay-multi-seller'),
         ];
         if (isset($messages[$notice])) {
             $success = in_array($notice, ['imported', 'already_imported', 'order_migrated', 'transition_enabled'], true);
@@ -216,6 +280,16 @@ final class LegacyMigration
         $importedConfig = $sellerId > 0 ? self::imported_config_for_seller($sellerId) : null;
         echo '<h2>' . esc_html__('Незавершені замовлення старого шлюзу', 'wayforpay-multi-seller') . '</h2>';
         echo '<p>' . esc_html__('Показано до 100 неоплачених замовлень у статусі очікування. Поточні категорії не використовуються як доказ продавця.', 'wayforpay-multi-seller') . '</p>';
+        $unmappedOrders = self::unmigrated_open_order_ids();
+        $unmappedCount = is_array($unmappedOrders) ? count($unmappedOrders) : null;
+        if ($unmappedCount === null) {
+            echo '<p class="notice notice-error inline">' . esc_html__('Не вдалося перевірити всі відкриті замовлення. Фінальне перемикання заблоковано.', 'wayforpay-multi-seller') . '</p>';
+        } elseif ($unmappedCount > 0) {
+            echo '<p class="notice notice-warning inline">' . esc_html(sprintf(
+                _n('%d відкрите замовлення ще не прив’язане. Фінальне перемикання заблоковано.', '%d відкритих замовлень ще не прив’язані. Фінальне перемикання заблоковано.', $unmappedCount, 'wayforpay-multi-seller'),
+                $unmappedCount
+            )) . '</p>';
+        }
         echo '<table class="widefat striped"><thead><tr><th>ID</th><th>' . esc_html__('Замовлення', 'wayforpay-multi-seller') . '</th><th>'
             . esc_html__('Сума', 'wayforpay-multi-seller') . '</th><th>' . esc_html__('Стан прив’язки', 'wayforpay-multi-seller') . '</th><th>'
             . esc_html__('Продавець із тим самим мерчантом', 'wayforpay-multi-seller') . '</th></tr></thead><tbody>';
@@ -341,11 +415,17 @@ final class LegacyMigration
     public static function enable_transition(): void
     {
         self::authorize_post('wfpms_enable_legacy_transition');
-        $import = get_option(self::IMPORT_OPTION, []);
-        $config = is_array($import) ? SellerRepository::config((int) ($import['config_id'] ?? 0)) : null;
-        if (!self::owns_callback_route() || !isset($_POST['confirm_transition']) || $config === null
-            || (int) $config['seller_id'] !== (int) ($import['seller_id'] ?? 0)
-            || self::imported_config_for_seller((int) ($import['seller_id'] ?? 0)) === null) {
+        if (!isset($_POST['confirm_transition'])) {
+            self::redirect('transition_blocked');
+        }
+        if (!self::transition_is_ready()) {
+            $unmappedOrders = self::unmigrated_open_order_ids();
+            if ($unmappedOrders === null) {
+                self::redirect('transition_blocked');
+            }
+            if ($unmappedOrders !== []) {
+                self::redirect('transition_orders_unmigrated');
+            }
             self::redirect('transition_blocked');
         }
         update_option(self::TRANSITION_OPTION, 'yes', false);

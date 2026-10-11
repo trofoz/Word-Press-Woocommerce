@@ -105,6 +105,10 @@ wfpms_legacy_assert(is_array($snapshot) && (string) $snapshot['merchant_account'
     && (int) $snapshot['config_id'] === $configId, 'migrated purchase freezes the imported merchant configuration');
 wfpms_legacy_assert(PurchaseRepository::attempts_for_purchase((int) $purchase['id']) === [],
     'migration itself does not create or charge a payment attempt');
+wfpms_legacy_assert(in_array((int) $setupOrder->get_id(), LegacyMigration::unmigrated_open_order_ids(), true),
+    'an open legacy order without a migration record is detected as a cutover blocker');
+wfpms_legacy_assert(!LegacyMigration::transition_is_ready(),
+    'cutover is not ready while any open legacy order remains unmigrated');
 
 $rejected = static function (int $orderId) use ($sellerId): bool {
     try {
@@ -178,6 +182,8 @@ wfpms_legacy_assert(!is_wp_error($callbackResponse) && wp_remote_retrieve_respon
     'unmapped legacy callbacks pass through to the original gateway while the cutover is staged; HTTP '
     . $callbackStatus . ', order status ' . ($setupOrder instanceof WC_Order ? $setupOrder->get_status() : 'missing')
     . ', response body ' . $callbackBody);
+wfpms_legacy_assert(LegacyMigration::transition_is_ready(),
+    'cutover becomes ready after all open legacy orders have been migrated or settled');
 update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $activeGateways = LegacyMigration::filter_gateways($gateways);
 wfpms_legacy_assert(!isset($activeGateways['wayforpay']) && isset($activeGateways['wfpms_card']) && isset($activeGateways['wfpms_iban']),

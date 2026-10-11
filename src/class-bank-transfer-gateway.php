@@ -20,6 +20,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
         $this->init_form_fields();
         $this->init_settings();
         $this->title = $this->get_option('title', $this->title);
+        add_action('woocommerce_update_options_payment_gateways_' . $this->id, [$this, 'process_admin_options']);
     }
 
     public function init_form_fields(): void
