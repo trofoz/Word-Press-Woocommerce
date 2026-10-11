@@ -49,6 +49,8 @@
 |---|---|---|
 | Numeric та suffixed mapped Approved, original inactive | 200, підписаний `accept`; pinned config; один receipt `needs_review` | Міграційний запис + «Платежі продавців»: review, order не completed |
 | Точний повтор Approved | 200; ті самі receipt/events; нуль payment_complete/completed | Лічильники DB й адресний runner двічі |
+| Прийнятий legacy Approved → Refunded/Voided → змінений Approved тієї самої спроби | Термінальна подія лишається фінансовою забороною; нуль payment_complete/completed; ownership return blocked | Справжні HTTP callback, штатний review, адресний runner; один receipt |
+| Термінальна подія іншої, зайвої legacy-спроби | Чинна прийнята оплата першої спроби лишається підставою; completed один раз | Receipt-scoped acceptance; повтор callback/runner без нових receipt/events/завершень |
 | Current config продавця змінився | Старий підпис перевіряється pinned config | Старі config/snapshot IDs незмінні |
 | Історичний ключ недоступний | 400; нуль нових receipt; current original key не підставляється | Журнал `historical_config_unavailable` |
 | Unmapped, original inactive | 503; жодного прийняття/нового purchase; тіло не є `accept` | Журнал `unmapped_reference_no_upstream`, order ID і reference hash |
@@ -84,3 +86,5 @@
 - Резервна копія та перевірений план повернення без втрати нових fork receipts. Якщо є mapped незавершені покупки або historical ключі відрізняються від current original, повне повернення ownership буде заблоковане: аварійний шлях — original active для unmapped + fork active для mapped.
 
 Синтетичний CI доводить роботу механізму на окремому runtime. Деактивація оригіналу в магазині потребує inventory і окремого погодженого переходу; цей документ не дозволяє змінювати сервер/production.
+
+Поточне рішення оператора: staging продовжує checkout і runner на `a64053e`; legacy ownership ще не передається. Перед окремим legacy-прийманням потрібно взяти виправлений пакет та його CI-звіт. Затриманий Approved не скасовує зафіксованих `legacy_Refunded`/`legacy_Voided` прийнятої спроби.

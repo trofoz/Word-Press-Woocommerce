@@ -95,11 +95,13 @@ final class PurchaseExecutionService
         }
         $terminalEvent = $wpdb->get_var($wpdb->prepare(
             'SELECT id FROM ' . PurchaseRepository::events_table()
-            . ' WHERE purchase_id=%d AND attempt_id=%d AND kind IN (%s,%s) LIMIT 1',
+            . ' WHERE purchase_id=%d AND attempt_id=%d AND kind IN (%s,%s,%s,%s) LIMIT 1',
             (int) $purchase['id'],
             $attemptId,
             'callback_Refunded',
-            'callback_Voided'
+            'callback_Voided',
+            'legacy_Refunded',
+            'legacy_Voided'
         ));
         return !$terminalEvent
             && in_array((string) $receipt['attempt_status'], ['approved', 'confirmed'], true);
