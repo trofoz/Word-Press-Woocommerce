@@ -403,6 +403,13 @@ $executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $di
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
 $executionWasAlreadyCompleted = $distinctAttemptsPurchase !== null
     && (string) $distinctAttemptsPurchase['execution_state'] === 'done';
+if (!$executionWasScheduled && !$executionWasAlreadyCompleted
+    && $distinctAttemptsPurchase !== null
+    && PurchaseExecutionService::is_financially_accepted($distinctAttemptsPurchase)) {
+    // Isolate the scheduler from background WP-Cron while still exercising its paid_review path.
+    PurchaseExecutionService::schedule((int) $distinctAttemptsPurchase['id']);
+    $executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $distinctAttemptsExecutionArgs);
+}
 $executionDiagnostic = $distinctAttemptsPurchase === null ? 'purchase=missing' : sprintf(
     'state=%s execution=%s error=%s accepted_receipt=%d eligible=%s scheduled=%s',
     (string) $distinctAttemptsPurchase['state'],
@@ -413,8 +420,7 @@ $executionDiagnostic = $distinctAttemptsPurchase === null ? 'purchase=missing' :
     $executionWasScheduled ? 'yes' : 'no'
 );
 wfpms_callback_integration_assert($executionWasScheduled || $executionWasAlreadyCompleted,
-    'The accepted callback queued execution or the scheduled runner already completed it (' . $executionDiagnostic . ').');
-wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
+    'The accepted receipt remains eligible for the scheduled runner in paid_review (' . $executionDiagnostic . ').');
 wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
     && (string) $distinctAttemptReceipts[0]['provider_reference'] === (string) $firstDistinctAttempt['external_reference']
     && (string) $distinctAttemptReceipts[1]['provider_reference'] === (string) $secondDistinctAttempt['external_reference']
@@ -425,6 +431,7 @@ wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($d
 // The scheduled runner may have fired already; duplicate delivery must stay harmless either way.
 do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
 do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
+wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
 $distinctAttemptsOrder = wc_get_order((int) $distinctAttemptsOrder->get_id());
 wfpms_callback_integration_assert($distinctAttemptsPurchase !== null
