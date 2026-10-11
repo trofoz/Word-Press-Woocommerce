@@ -16,26 +16,16 @@ final class PurchaseExecutionService
         add_action('wfpms_expire_purchases', [self::class, 'expire_due']);
         add_action('woocommerce_payment_complete', [self::class, 'observe_woo_payment_complete'], 10, 1);
         add_filter('woocommerce_valid_order_statuses_for_payment_complete', [self::class, 'filter_payment_complete_statuses'], PHP_INT_MAX, 2);
-        add_filter('woocommerce_payment_complete_order_status', [self::class, 'filter_payment_complete_order_status'], 10, 3);
+        add_filter('woocommerce_payment_complete_order_status', [self::class, 'filter_payment_complete_order_status'], PHP_INT_MAX, 3);
     }
 
-    /** Complete paid virtual services only during this runner's authorized completion call. */
+    /** Complete every confirmed paid purchase only during this runner's authorized call. */
     public static function filter_payment_complete_order_status(string $status, int $orderId, $order): string
     {
-        if ($status !== 'processing' || !isset(self::$authorizedPaymentCompletions[$orderId])
+        if (!isset(self::$authorizedPaymentCompletions[$orderId])
             || !$order instanceof \WC_Order || (int) $order->get_id() !== $orderId
             || $order->get_total() <= 0) {
             return $status;
-        }
-        $items = $order->get_items('line_item');
-        if (count($items) === 0) {
-            return $status;
-        }
-        foreach ($items as $item) {
-            $product = $item->get_product();
-            if (!$product instanceof \WC_Product || !$product->is_virtual()) {
-                return $status;
-            }
         }
         return 'completed';
     }

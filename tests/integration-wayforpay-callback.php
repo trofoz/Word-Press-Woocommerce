@@ -162,6 +162,8 @@ wfpms_callback_integration_assert(($pausedResult['result'] ?? '') === 'failure'
     'Direct card process_payment calls are rejected before creating a purchase while the transition is paused.');
 update_option('wfpms_legacy_transition_enabled', 'yes', false);
 [$paidOrder, $paidPurchase, $paidAttempt] = $createAttempt();
+wfpms_callback_integration_assert($paidOrder->get_status() === 'pending',
+    'Selecting card for a virtual purchase leaves it pending before payment confirmation.');
 $sendRejected($paidAttempt, $secret, 'invalid_signature');
 $untrustedCallbackReceiptCount = (int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
@@ -264,6 +266,10 @@ $executionArgs = [(int) $paidPurchase['id']];
 $paidOrderId = (int) $paidOrder->get_id();
 $completedTransitions = 0;
 $paymentCompletions = 0;
+$virtualProcessingTransitions = 0;
+add_action('woocommerce_order_status_processing', static function (int $id) use ($paidOrderId, &$virtualProcessingTransitions): void {
+    if ($id === $paidOrderId) { $virtualProcessingTransitions++; }
+});
 add_action('woocommerce_order_status_completed', static function (int $orderId) use ($paidOrderId, &$completedTransitions): void {
     if ($orderId === $paidOrderId) {
         $completedTransitions++;
@@ -284,7 +290,7 @@ $paidOrderStatus = $paidOrder instanceof WC_Order ? $paidOrder->get_status() : '
 $paidExecutionState = (string) ($paidPurchase['execution_state'] ?? 'missing');
 $paidExecutionError = (string) ($paidPurchase['execution_error_code'] ?? '');
 wfpms_callback_integration_assert($paidOrder instanceof WC_Order && $paidOrder->get_status() === 'completed'
-    && $completedTransitions === 1 && $paymentCompletions === 1
+    && $completedTransitions === 1 && $paymentCompletions === 1 && $virtualProcessingTransitions === 0
     && $paidPurchase !== null && $paidExecutionState === 'done', 'Accepted payment completion state: order=' . $paidOrderStatus
     . ', execution=' . $paidExecutionState . ', error=' . $paidExecutionError . '.');
 $executionCount = (int) $wpdb->get_var($wpdb->prepare(
@@ -331,7 +337,7 @@ PurchaseExecutionService::run((int) $paidPurchase['id']);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null && (string) $paidPurchase['execution_state'] === 'done'
     && wc_get_order($paidOrderId)->get_status() === 'completed'
-    && $completedTransitions === 1 && $paymentCompletions === 1
+    && $completedTransitions === 1 && $paymentCompletions === 1 && $virtualProcessingTransitions === 0
     && (int) $wpdb->get_var($wpdb->prepare(
         'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
         (int) $paidPurchase['id'], 'execution_done'
@@ -342,6 +348,7 @@ echo "PASS: accepted card virtual service becomes completed once; duplicate call
 $physicalOrderId = (int) $physicalOrder->get_id();
 $physicalCompletions = 0;
 $physicalPaymentCompletions = 0;
+$physicalProcessingTransitions = 0;
 add_action('woocommerce_order_status_completed', static function (int $id) use ($physicalOrderId, &$physicalCompletions): void {
     if ($id === $physicalOrderId) {
         $physicalCompletions++;
@@ -349,6 +356,9 @@ add_action('woocommerce_order_status_completed', static function (int $id) use (
 });
 add_action('woocommerce_payment_complete', static function (int $id) use ($physicalOrderId, &$physicalPaymentCompletions): void {
     if ($id === $physicalOrderId) { $physicalPaymentCompletions++; }
+});
+add_action('woocommerce_order_status_processing', static function (int $id) use ($physicalOrderId, &$physicalProcessingTransitions): void {
+    if ($id === $physicalOrderId) { $physicalProcessingTransitions++; }
 });
 wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'pending',
     'Selecting card for a physical purchase leaves it pending before payment confirmation.');
@@ -359,15 +369,34 @@ $sendApproved($physicalAttempt, (string) $physicalAttempt['expected_amount'], (s
 PurchaseExecutionService::run((int) $physicalPurchase['id']);
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $physicalPurchase['id']]);
 wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'completed'
-    && $physicalCompletions === 1 && $physicalPaymentCompletions === 1,
+    && $physicalCompletions === 1 && $physicalPaymentCompletions === 1 && $physicalProcessingTransitions === 0,
     'Confirmed physical card purchase reaches completed once; duplicate callback and runner do not repeat completion.');
 echo "PASS: confirmed physical card purchase completed once; duplicate callback and runner are harmless.\n";
 [$mixedOrder, $mixedPurchase, $mixedAttempt] = $createAttempt([$product, $physicalProduct]);
+$mixedOrderId = (int) $mixedOrder->get_id();
+$mixedCompletions = 0;
+$mixedPaymentCompletions = 0;
+$mixedProcessingTransitions = 0;
+add_action('woocommerce_order_status_completed', static function (int $id) use ($mixedOrderId, &$mixedCompletions): void {
+    if ($id === $mixedOrderId) { $mixedCompletions++; }
+});
+add_action('woocommerce_payment_complete', static function (int $id) use ($mixedOrderId, &$mixedPaymentCompletions): void {
+    if ($id === $mixedOrderId) { $mixedPaymentCompletions++; }
+});
+add_action('woocommerce_order_status_processing', static function (int $id) use ($mixedOrderId, &$mixedProcessingTransitions): void {
+    if ($id === $mixedOrderId) { $mixedProcessingTransitions++; }
+});
+wfpms_callback_integration_assert(wc_get_order($mixedOrderId)->get_status() === 'pending',
+    'Selecting card for a mixed purchase leaves it pending before payment confirmation.');
+$sendApproved($mixedAttempt, (string) $mixedAttempt['expected_amount'], (string) $mixedAttempt['currency']);
+PurchaseExecutionService::run((int) $mixedPurchase['id']);
 $sendApproved($mixedAttempt, (string) $mixedAttempt['expected_amount'], (string) $mixedAttempt['currency']);
 PurchaseExecutionService::run((int) $mixedPurchase['id']);
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $mixedPurchase['id']]);
-wfpms_callback_integration_assert(wc_get_order((int) $mixedOrder->get_id())->get_status() === 'processing',
-    'Mixed virtual and physical purchases retain native processing.');
+wfpms_callback_integration_assert(wc_get_order($mixedOrderId)->get_status() === 'completed'
+    && $mixedCompletions === 1 && $mixedPaymentCompletions === 1 && $mixedProcessingTransitions === 0,
+    'Confirmed mixed card purchase completes once without processing or repeated completion.');
+echo "PASS: confirmed mixed card purchase completed once without processing; duplicate callback and runner are harmless.\n";
 $unmanagedOrder = wc_create_order();
 $unmanagedOrder->add_product($product, 1);
 $unmanagedOrder->calculate_totals();
@@ -375,7 +404,7 @@ $unmanagedOrder->save();
 $unmanagedOrder->payment_complete();
 wfpms_callback_integration_assert(wc_get_order((int) $unmanagedOrder->get_id())->get_status() === 'processing',
     'Unmanaged virtual services retain native WooCommerce completion policy.');
-echo "PASS: physical, mixed, and unmanaged virtual purchases retain native processing.\n";
+echo "PASS: unmanaged virtual purchases retain native WooCommerce processing.\n";
 
 [$wrongAmountOrder, $wrongAmountPurchase, $wrongAmountAttempt] = $createAttempt();
 $wrongAmountOrderId = (int) $wrongAmountOrder->get_id();
