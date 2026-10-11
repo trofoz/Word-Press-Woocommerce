@@ -196,9 +196,11 @@ update_option('woocommerce_wayforpay_settings', [
 ], false);
 $upstreamGateway = WC()->payment_gateways()->payment_gateways()['wayforpay'] ?? null;
 $adminUsers = get_users(['role' => 'administrator', 'number' => 1]);
-if (isset($adminUsers[0])) {
-    wp_set_current_user((int) $adminUsers[0]->ID);
+if (!isset($adminUsers[0])) {
+    throw new RuntimeException('The integration administrator is unavailable.');
 }
+$integrationAdminId = (int) $adminUsers[0]->ID;
+wp_set_current_user($integrationAdminId);
 ob_start();
 WfpMultiSeller\LegacyMigration::render_page();
 $standaloneAdminHtml = (string) ob_get_clean();
@@ -214,6 +216,41 @@ wfpms_integration_assert(WfpMultiSeller\LegacyMigration::standalone_activation_a
     && $upstreamGateway instanceof WC_Payment_Gateway
     && has_action('woocommerce_api_wc_wayforpay', [$upstreamGateway, 'check_wayforpay_response']) !== false,
     'standalone activation is available beside upstream settings and leaves the historical callback with upstream');
+$standaloneSecret = 'synthetic-standalone-secret';
+SellerRepository::save($sellerIds[2], [
+    'internal_label' => 'Seller 3',
+    'legal_name' => 'Integration Seller 3',
+    'tax_id' => 'TEST3',
+], [
+    'recipient_name' => 'Integration Seller 3',
+    'iban' => 'UA213223130000026007233566001',
+    'bank_name' => 'Integration Bank',
+    'purpose_template' => 'Standalone test order {order_number}',
+    'merchant_account' => 'synthetic-standalone-merchant',
+    'merchant_domain' => (string) wp_parse_url(home_url('/'), PHP_URL_HOST),
+    'card_enabled' => 1,
+    'iban_enabled' => 1,
+    'secret_plaintext' => $standaloneSecret,
+    'operator_checked' => false,
+], WfpMultiSeller\SecretStore::encrypt($standaloneSecret), $integrationAdminId);
+$standaloneCardOrder = wc_create_order();
+$standaloneCardOrder->add_product(wc_get_product($manualProduct->get_id()), 1);
+$standaloneCardOrder->set_payment_method('wfpms_card');
+$standaloneCardOrder->calculate_totals();
+$standaloneCardOrder->save();
+$standaloneCardGateway = WC()->payment_gateways()->payment_gateways()['wfpms_card'] ?? null;
+$standaloneCardResult = $standaloneCardGateway instanceof WfpMultiSeller\WayForPayGateway
+    ? $standaloneCardGateway->process_payment((int) $standaloneCardOrder->get_id()) : ['result' => 'failure'];
+$standaloneCardPurchase = WfpMultiSeller\PurchaseRepository::for_order((int) $standaloneCardOrder->get_id());
+$standaloneCardAttempts = $standaloneCardPurchase === null
+    ? [] : WfpMultiSeller\PurchaseRepository::attempts_for_purchase((int) $standaloneCardPurchase['id']);
+wfpms_integration_assert(($standaloneCardResult['result'] ?? '') === 'success'
+    && count($standaloneCardAttempts) === 1
+    && (string) $standaloneCardAttempts[0]['merchant_account'] === 'synthetic-standalone-merchant'
+    && get_option('wfpms_legacy_import', []) === []
+    && !WfpMultiSeller\LegacyMigration::owns_callback_route()
+    && has_action('woocommerce_api_wfpms_wayforpay', [WfpMultiSeller\WayForPayGateway::class, 'handle_callback']) !== false,
+    'standalone card payment uses its own synthetic seller merchant and callback without importing or claiming legacy settings');
 $standaloneOrder = wc_create_order();
 $standaloneOrder->add_product(wc_get_product($product->get_id()), 1);
 $standaloneOrder->set_payment_method('wfpms_iban');
