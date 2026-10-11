@@ -166,7 +166,10 @@ $callbackResponse = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
     'headers' => ['Content-Type' => 'application/json'],
     'body' => wp_json_encode($callback),
 ]);
-$setupOrder = wc_get_order((int) $setupOrder->get_id());
+$setupOrderId = (int) $setupOrder->get_id();
+wp_cache_delete($setupOrderId, 'orders');
+clean_post_cache($setupOrderId);
+$setupOrder = wc_get_order($setupOrderId);
 $callbackStatus = is_wp_error($callbackResponse) ? 'WP_Error: ' . $callbackResponse->get_error_message()
     : (string) wp_remote_retrieve_response_code($callbackResponse);
 $callbackBody = is_wp_error($callbackResponse) ? '' : substr(wp_strip_all_tags((string) wp_remote_retrieve_body($callbackResponse)), 0, 180);
