@@ -403,8 +403,17 @@ $executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $di
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
 $executionWasAlreadyCompleted = $distinctAttemptsPurchase !== null
     && (string) $distinctAttemptsPurchase['execution_state'] === 'done';
+$executionDiagnostic = $distinctAttemptsPurchase === null ? 'purchase=missing' : sprintf(
+    'state=%s execution=%s error=%s accepted_receipt=%d eligible=%s scheduled=%s',
+    (string) $distinctAttemptsPurchase['state'],
+    (string) $distinctAttemptsPurchase['execution_state'],
+    (string) $distinctAttemptsPurchase['execution_error_code'],
+    (int) $distinctAttemptsPurchase['accepted_receipt_id'],
+    PurchaseExecutionService::is_financially_accepted($distinctAttemptsPurchase) ? 'yes' : 'no',
+    $executionWasScheduled ? 'yes' : 'no'
+);
 wfpms_callback_integration_assert($executionWasScheduled || $executionWasAlreadyCompleted,
-    'The accepted callback queued execution or the scheduled runner already completed it.');
+    'The accepted callback queued execution or the scheduled runner already completed it (' . $executionDiagnostic . ').');
 wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
 wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
     && (string) $distinctAttemptReceipts[0]['provider_reference'] === (string) $firstDistinctAttempt['external_reference']
