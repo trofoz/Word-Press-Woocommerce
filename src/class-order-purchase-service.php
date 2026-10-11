@@ -193,8 +193,7 @@ final class OrderPurchaseService
     public static function prepare_order_pay_checkout($wp = null): void
     {
         global $wp_query;
-        if (!function_exists('wc_get_page_id') || !is_object($wp_query)
-            || absint($wp_query->get('page_id')) !== absint(wc_get_page_id('checkout'))
+        if (!is_object($wp_query)
             || !isset($_GET['order-pay'], $_GET['pay_for_order'], $_GET['key'])
             || !is_scalar($_GET['order-pay']) || !is_scalar($_GET['pay_for_order']) || !is_scalar($_GET['key'])
             || (string) wp_unslash((string) $_GET['pay_for_order']) !== 'true') {
