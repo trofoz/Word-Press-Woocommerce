@@ -62,6 +62,7 @@ update_option('wfpms_legacy_import', [
 ], false);
 delete_option('wfpms_legacy_callback_owner');
 delete_option('wfpms_legacy_transition_enabled');
+delete_option('wfpms_standalone_mode_enabled');
 $productId = (int) get_option('wfpms_integration_manual_product_id', 0);
 $product = $productId > 0 ? wc_get_product($productId) : false;
 wfpms_legacy_assert($product instanceof WC_Product, 'setup-mode product fixture exists');
@@ -108,6 +109,19 @@ wfpms_legacy_assert(is_array($snapshot) && (string) $snapshot['merchant_account'
     && (int) $snapshot['config_id'] === $configId, 'migrated purchase freezes the imported merchant configuration');
 wfpms_legacy_assert(PurchaseRepository::attempts_for_purchase((int) $purchase['id']) === [],
     'migration itself does not create or charge a payment attempt');
+$preTransitionCardGateway = new WayForPayGateway();
+$preTransitionCardGateway->enabled = 'yes';
+$preTransitionCardPayment = $preTransitionCardGateway->process_payment((int) $legacyOrder->get_id());
+wfpms_legacy_assert(($preTransitionCardPayment['result'] ?? '') === 'success'
+    && count(PurchaseRepository::attempts_for_purchase((int) $purchase['id'])) === 1,
+    'a migrated open purchase keeps its fork payment method available before the global cutover');
+$numericReferenceOrder = wc_create_order();
+$numericReferenceOrder->set_status('pending');
+$numericReferenceOrder->set_payment_method('wayforpay');
+$numericReferenceOrder->add_product($product, 1);
+$numericReferenceOrder->calculate_totals();
+$numericReferenceOrder->save();
+OrderPurchaseService::migrate_legacy_order((int) $numericReferenceOrder->get_id(), $sellerId, 1);
 wfpms_legacy_assert(in_array((int) $setupOrder->get_id(), LegacyMigration::unmigrated_open_order_ids(), true),
     'an open legacy order without a migration record is detected as a cutover blocker');
 wfpms_legacy_assert(!LegacyMigration::transition_is_ready(),
@@ -191,6 +205,35 @@ update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $activeGateways = LegacyMigration::filter_gateways($gateways);
 wfpms_legacy_assert(!isset($activeGateways['wayforpay']) && isset($activeGateways['wfpms_card']) && isset($activeGateways['wfpms_iban']),
     'enabling the transition hides upstream WayForPay and exposes fork gateways');
+
+$numericReferenceCallback = [
+    'merchantAccount' => $merchant,
+    'orderReference' => (string) $numericReferenceOrder->get_id(),
+    'amount' => (string) $numericReferenceOrder->get_total(),
+    'currency' => (string) $numericReferenceOrder->get_currency(),
+    'authCode' => 'AUTH-NUMERIC-REFERENCE',
+    'cardPan' => '411111******1111',
+    'transactionStatus' => 'Approved',
+    'reasonCode' => '1100',
+];
+$numericReferenceCallback['merchantSignature'] = hash_hmac('md5', implode(';', array_map('strval', [
+    $numericReferenceCallback['merchantAccount'], $numericReferenceCallback['orderReference'],
+    $numericReferenceCallback['amount'], $numericReferenceCallback['currency'], $numericReferenceCallback['authCode'],
+    $numericReferenceCallback['cardPan'], $numericReferenceCallback['transactionStatus'], $numericReferenceCallback['reasonCode'],
+])), $secret);
+$numericReferenceResponse = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
+    'timeout' => 10,
+    'headers' => ['Content-Type' => 'application/json'],
+    'body' => wp_json_encode($numericReferenceCallback),
+]);
+$numericReferenceOrderId = (int) $numericReferenceOrder->get_id();
+wp_cache_delete($numericReferenceOrderId, 'orders');
+clean_post_cache($numericReferenceOrderId);
+$numericReferenceOrder = wc_get_order($numericReferenceOrderId);
+wfpms_legacy_assert(!is_wp_error($numericReferenceResponse)
+    && wp_remote_retrieve_response_code($numericReferenceResponse) === 200
+    && $numericReferenceOrder instanceof WC_Order && $numericReferenceOrder->is_paid(),
+    'an explicitly migrated order accepts a valid callback with a numeric legacy orderReference');
 
 update_option('wfpms_sales_paused', 'yes', false);
 $pauseFiltered = OrderPurchaseService::filter_cart_gateways($gateways);

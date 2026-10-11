@@ -179,8 +179,8 @@ final class PurchaseExecutionService
         }
         $rows = $wpdb->get_results($wpdb->prepare(
             'SELECT id,order_id,state FROM ' . PurchaseRepository::purchases_table()
-            . ' WHERE expires_at IS NOT NULL AND expires_at<=%s AND state IN (%s,%s) ORDER BY expires_at ASC LIMIT 100',
-            current_time('mysql', true), 'awaiting_payment', 'expired'
+            . ' WHERE expires_at IS NOT NULL AND expires_at<=%s AND state=%s ORDER BY expires_at ASC,id ASC LIMIT 100',
+            current_time('mysql', true), 'awaiting_payment'
         ), ARRAY_A);
         foreach (is_array($rows) ? $rows : [] as $row) {
             $orderId = (int) $row['order_id'];

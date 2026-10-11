@@ -279,7 +279,7 @@ final class OrderPurchaseService
                 self::validate_changed_products($order, $existing, $sellerId);
             }
             $seller = SellerRepository::find($sellerId);
-            if ($seller === null || ($existing === null && (int) $seller['active'] !== 1)) {
+            if ($seller === null || (int) $seller['active'] !== 1) {
                 throw new \RuntimeException('The assigned seller is unavailable.');
             }
             if ($existing !== null) {

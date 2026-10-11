@@ -142,7 +142,7 @@ final class PurchaseRepository
                 . 'FROM ' . SellerRepository::configs_table() . ' WHERE id=%d FOR UPDATE',
                 $configId
             ), ARRAY_A);
-            if (!is_array($seller) || !is_array($config) || (int) $config['seller_id'] !== $sellerId
+            if (!is_array($seller) || (int) $seller['active'] !== 1 || !is_array($config) || (int) $config['seller_id'] !== $sellerId
                 || (string) $config['recipient_name'] !== (string) $snapshot['legal_name']
                 || (string) $config['tax_id'] !== (string) $snapshot['tax_id']
                 || (string) $config['iban'] !== (string) $snapshot['iban']
@@ -152,7 +152,7 @@ final class PurchaseRepository
                 throw new \RuntimeException('Seller or payment configuration changed during purchase finalization.');
             }
             if ($purchase === null) {
-                if ((int) $seller['active'] !== 1 || (int) $seller['current_config_id'] !== $configId
+                if ((int) $seller['current_config_id'] !== $configId
                     || (string) $seller['internal_label'] !== (string) $snapshot['seller_label']) {
                     throw new \RuntimeException('The seller configuration changed during checkout. Please retry.');
                 }

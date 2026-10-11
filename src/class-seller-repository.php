@@ -34,6 +34,16 @@ final class SellerRepository
         return is_array($row) ? $row : null;
     }
 
+    public static function is_active(int $sellerId, bool $forUpdate = false): bool
+    {
+        global $wpdb;
+        $suffix = $forUpdate ? ' FOR UPDATE' : '';
+        return (int) $wpdb->get_var($wpdb->prepare(
+            'SELECT active FROM ' . self::sellers_table() . ' WHERE id=%d' . $suffix,
+            $sellerId
+        )) === 1;
+    }
+
     public static function current_config(int $sellerId): ?array
     {
         global $wpdb;

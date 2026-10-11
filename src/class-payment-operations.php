@@ -592,7 +592,7 @@ final class PaymentOperations
         $paused = self::sales_paused();
         echo '<hr><h2>' . esc_html__('Стан продажів', 'wayforpay-multi-seller') . '</h2>';
         if (!LegacyMigration::is_transition_enabled()) {
-            echo '<p>' . esc_html__('Керування паузою стане доступним після завершення переходу на шлюзи форку.', 'wayforpay-multi-seller') . '</p>';
+            echo '<p>' . esc_html__('Керування паузою стане доступним після запуску standalone режиму або завершення переходу на шлюзи форку.', 'wayforpay-multi-seller') . '</p>';
             return;
         }
         echo '<p>' . esc_html($paused

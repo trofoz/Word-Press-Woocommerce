@@ -49,11 +49,14 @@ final class BankTransferGateway extends \WC_Payment_Gateway
 
     public function is_available(): bool
     {
-        if (!parent::is_available() || !LegacyMigration::is_transition_enabled() || !function_exists('WC')) {
+        if (!parent::is_available() || !function_exists('WC')) {
             return false;
         }
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));
+            if (!LegacyMigration::payments_enabled_for_order($orderId)) {
+                return false;
+            }
             $order = $orderId > 0 ? wc_get_order($orderId) : false;
             $purchase = $orderId > 0 ? PurchaseRepository::for_order($orderId) : null;
             if (!$order instanceof \WC_Order || $purchase === null
@@ -66,8 +69,12 @@ final class BankTransferGateway extends \WC_Payment_Gateway
                 return false;
             }
             $config = SellerRepository::config((int) $purchase['config_id']);
-            return $config !== null && (int) $config['iban_enabled'] === 1
+            return SellerRepository::is_active((int) $purchase['seller_id'])
+                && $config !== null && (int) $config['iban_enabled'] === 1
                 && trim((string) $config['iban']) !== '' && trim((string) $config['bank_name']) !== '';
+        }
+        if (!LegacyMigration::is_transition_enabled()) {
+            return false;
         }
         if (!WC()->cart || WC()->cart->is_empty() || OrderPurchaseService::cart_is_zero_total_for_gateway()) {
             return false;
@@ -88,7 +95,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
             if ($this->enabled !== 'yes') {
                 throw new \RuntimeException('Bank transfer is disabled in WooCommerce settings.');
             }
-            if (!LegacyMigration::is_transition_enabled()) {
+            if (!LegacyMigration::payments_enabled_for_order($orderId)) {
                 throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
             }
             if (!PaymentOperations::payment_allowed_for_order($orderId)) {
@@ -166,7 +173,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
     private static function issue_instructions(int $orderId, int $purchaseId): array
     {
         global $wpdb;
-        if (!LegacyMigration::is_transition_enabled() || !PaymentOperations::payment_allowed_for_order($orderId)) {
+        if (!LegacyMigration::payments_enabled_for_order($orderId) || !PaymentOperations::payment_allowed_for_order($orderId)) {
             throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
         }
         if (!PurchaseRepository::order_lock($orderId)) {
@@ -183,6 +190,9 @@ final class BankTransferGateway extends \WC_Payment_Gateway
                 if ($purchase === null || (int) $purchase['id'] !== $purchaseId
                     || !$order instanceof \WC_Order || !is_array($snapshot)) {
                     throw new \RuntimeException('The saved purchase is unavailable.');
+                }
+                if (!SellerRepository::is_active((int) $purchase['seller_id'], true)) {
+                    throw new \RuntimeException('The assigned seller is archived and cannot receive a new payment attempt.');
                 }
                 if (!in_array($order->get_status(), ['pending', 'on-hold'], true)
                     || in_array((string) $purchase['state'], ['paid', 'review', 'paid_review', 'expired', 'free'], true)) {

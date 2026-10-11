@@ -10,6 +10,7 @@ final class LegacyMigration
     private const IMPORT_OPTION = 'wfpms_legacy_import';
     private const CALLBACK_OWNER_OPTION = 'wfpms_legacy_callback_owner';
     private const TRANSITION_OPTION = 'wfpms_legacy_transition_enabled';
+    private const STANDALONE_OPTION = 'wfpms_standalone_mode_enabled';
     private const CALLBACK_ACTION = 'wc_wayforpay';
 
     public static function migrations_table(): string
@@ -25,6 +26,7 @@ final class LegacyMigration
         add_action('admin_post_wfpms_claim_legacy_callback', [self::class, 'claim_callback_route']);
         add_action('admin_post_wfpms_migrate_legacy_order', [self::class, 'migrate_order']);
         add_action('admin_post_wfpms_enable_legacy_transition', [self::class, 'enable_transition']);
+        add_action('admin_post_wfpms_enable_standalone_mode', [self::class, 'enable_standalone_mode']);
         add_action('admin_notices', [self::class, 'admin_notice']);
         // This priority lets the fork own the historical route before the upstream handler.
         add_action('woocommerce_api_' . self::CALLBACK_ACTION, [self::class, 'handle_callback'], 0);
@@ -76,7 +78,36 @@ final class LegacyMigration
 
     public static function is_transition_enabled(): bool
     {
+        return self::is_legacy_transition_enabled() || self::is_standalone_enabled();
+    }
+
+    public static function is_legacy_transition_enabled(): bool
+    {
         return get_option(self::TRANSITION_OPTION, 'no') === 'yes';
+    }
+
+    public static function is_standalone_enabled(): bool
+    {
+        return get_option(self::STANDALONE_OPTION, 'no') === 'yes';
+    }
+
+    public static function payments_enabled_for_order(int $orderId): bool
+    {
+        if (self::is_transition_enabled()) {
+            return true;
+        }
+        if ($orderId < 1 || !self::owns_callback_route()) {
+            return false;
+        }
+        $mapping = self::for_order($orderId);
+        $purchase = PurchaseRepository::for_order($orderId);
+        $order = wc_get_order($orderId);
+        return $mapping !== null && $purchase !== null && $order instanceof \WC_Order
+            && (int) $mapping['purchase_id'] === (int) $purchase['id']
+            && (int) $mapping['seller_id'] === (int) $purchase['seller_id']
+            && (int) $mapping['config_id'] === (int) $purchase['config_id']
+            && $order->get_payment_method() === 'wayforpay'
+            && !$order->is_paid() && in_array($order->get_status(), ['pending', 'on-hold'], true);
     }
 
     public static function owns_callback_route(): bool
@@ -160,7 +191,17 @@ final class LegacyMigration
 
     public static function filter_gateways(array $gateways): array
     {
+        if (self::is_standalone_enabled() && !self::is_legacy_transition_enabled()) {
+            return $gateways;
+        }
         if (!self::is_transition_enabled()) {
+            if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
+                $orderId = absint(get_query_var('order-pay'));
+                if (self::payments_enabled_for_order($orderId)) {
+                    unset($gateways['wayforpay']);
+                    return $gateways;
+                }
+            }
             unset($gateways['wfpms_card'], $gateways['wfpms_iban']);
             return $gateways;
         }
@@ -193,6 +234,8 @@ final class LegacyMigration
             'order_migrated' => __('Замовлення прив’язано до продавця та зафіксовано фінансовий знімок.', 'wayforpay-multi-seller'),
             'callback_owned' => __('Форк обробляє callback мігрованих замовлень, а інші передає оригінальному шлюзу. Чинний checkout працює до завершення переходу.', 'wayforpay-multi-seller'),
             'transition_enabled' => __('Нові платежі форку увімкнено; невідомі форку старі callback передаються оригінальному шлюзу, який має лишатися активним.', 'wayforpay-multi-seller'),
+            'standalone_enabled' => __('Standalone режим увімкнено. Нові оплати використовують профілі продавців; старі способи оплати лишаються доступними для товарів без продавця.', 'wayforpay-multi-seller'),
+            'standalone_blocked' => __('Standalone режим недоступний, доки активний оригінальний WayForPay, збережені його налаштування або форк уже володіє legacy callback.', 'wayforpay-multi-seller'),
             'settings_missing' => __('Не знайдено повні налаштування оригінального шлюзу (merchant_account, secret_key).', 'wayforpay-multi-seller'),
             'seller_required' => __('Оберіть продавця з перевіреною юридичною особою та реквізитами.', 'wayforpay-multi-seller'),
             'domain_required' => __('Вкажіть домен мерчанта й підтвердьте його в кабінеті WayForPay.', 'wayforpay-multi-seller'),
@@ -203,7 +246,7 @@ final class LegacyMigration
             'transition_orders_unmigrated' => __('Перехід не завершено: спершу прив’яжіть до продавців усі відкриті неоплачені замовлення старого шлюзу. Перехід залишився вимкненим.', 'wayforpay-multi-seller'),
         ];
         if (isset($messages[$notice])) {
-            $success = in_array($notice, ['imported', 'already_imported', 'order_migrated', 'transition_enabled'], true);
+            $success = in_array($notice, ['imported', 'already_imported', 'order_migrated', 'transition_enabled', 'standalone_enabled'], true);
             echo '<div class="notice ' . esc_attr($success ? 'notice-success' : 'notice-error') . '"><p>' . esc_html($messages[$notice]) . '</p></div>';
         }
 
@@ -223,12 +266,33 @@ final class LegacyMigration
             . '</td></tr>';
         echo '<tr><th>' . esc_html__('Домен за home_url()', 'wayforpay-multi-seller') . '</th><td>' . esc_html($domain !== '' ? $domain : '—') . '</td></tr>';
         $transitionLabel = self::is_transition_enabled()
-            ? __('Форк активний для нових оплат', 'wayforpay-multi-seller')
+            ? (self::is_standalone_enabled()
+                ? __('Standalone режим активний для нових оплат', 'wayforpay-multi-seller')
+                : __('Форк активний для нових оплат після переходу', 'wayforpay-multi-seller'))
             : (self::owns_callback_route()
                 ? __('Перехід підготовлено: чинний шлюз і checkout збережені до фінального перемикання', 'wayforpay-multi-seller')
                 : __('Режим налаштування: чинний шлюз і checkout збережені', 'wayforpay-multi-seller'));
         echo '<tr><th>' . esc_html__('Стан переходу', 'wayforpay-multi-seller') . '</th><td>'
             . esc_html($transitionLabel) . '</td></tr></tbody></table>';
+
+        if (self::is_standalone_enabled()) {
+            echo '<h2>' . esc_html__('Standalone режим', 'wayforpay-multi-seller') . '</h2>';
+            echo '<p>' . esc_html__('Плагін працює без оригінального WayForPay. Щоб приймати оплату, створіть профілі продавців, налаштуйте реквізити й призначте товари.', 'wayforpay-multi-seller') . '</p>';
+            echo '</div>';
+            return;
+        }
+        if (!self::upstream_callback_is_registered() && !class_exists('WC_wayforpay')
+            && !self::owns_callback_route() && self::legacy_settings() === null) {
+            echo '<h2>' . esc_html__('Самостійний запуск', 'wayforpay-multi-seller') . '</h2>';
+            echo '<p>' . esc_html__('Оригінальний WayForPay не виявлено. Увімкніть окремий standalone режим, щоб використовувати профілі продавців без імпорту старого мерчанта чи переходу callback.', 'wayforpay-multi-seller') . '</p>';
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_enable_standalone_mode">';
+            wp_nonce_field('wfpms_enable_standalone_mode');
+            echo '<p><label><input type="checkbox" name="confirm_standalone" value="1" required> '
+                . esc_html__('Підтверджую запуск нових оплат через профілі продавців.', 'wayforpay-multi-seller') . '</label></p>';
+            submit_button(__('Увімкнути standalone режим', 'wayforpay-multi-seller'));
+            echo '</form></div>';
+            return;
+        }
 
         echo '<h2>' . esc_html__('Імпорт мерчанта у профіль продавця', 'wayforpay-multi-seller') . '</h2>';
         if ($settings === null) {
@@ -451,6 +515,18 @@ final class LegacyMigration
         self::redirect('transition_enabled');
     }
 
+    public static function enable_standalone_mode(): void
+    {
+        self::authorize_post('wfpms_enable_standalone_mode');
+        if (!isset($_POST['confirm_standalone']) || self::owns_callback_route()
+            || self::upstream_callback_is_registered() || class_exists('WC_wayforpay')
+            || self::legacy_settings() !== null) {
+            self::redirect('standalone_blocked');
+        }
+        update_option(self::STANDALONE_OPTION, 'yes', false);
+        self::redirect('standalone_enabled');
+    }
+
     public static function admin_notice(): void
     {
         if (!current_user_can('manage_woocommerce') || (!self::legacy_gateway_is_configured() && !class_exists('WC_wayforpay'))
@@ -491,7 +567,7 @@ final class LegacyMigration
             exit;
         }
         $reference = (string) $data['orderReference'];
-        if (preg_match('/\A([1-9][0-9]*)_woo_w4p_([1-9][0-9]*)\z/', $reference, $matches) !== 1) {
+        if (preg_match('/\A([1-9][0-9]*)(?:_woo_w4p_[1-9][0-9]*)?\z/', $reference, $matches) !== 1) {
             status_header(400);
             exit;
         }

@@ -40,6 +40,14 @@ $gatewayIds = array_map(
 );
 wfpms_integration_assert(in_array('wfpms_card', $gatewayIds, true), 'card gateway is registered in WooCommerce');
 wfpms_integration_assert(in_array('wfpms_iban', $gatewayIds, true), 'IBAN gateway is registered in WooCommerce');
+$standaloneFixtureGateways = ['wayforpay' => new stdClass(), 'wfpms_card' => new stdClass()];
+delete_option('wfpms_legacy_transition_enabled');
+update_option('wfpms_standalone_mode_enabled', 'yes', false);
+wfpms_integration_assert(WfpMultiSeller\LegacyMigration::is_transition_enabled()
+    && !WfpMultiSeller\LegacyMigration::is_legacy_transition_enabled()
+    && array_keys(WfpMultiSeller\LegacyMigration::filter_gateways($standaloneFixtureGateways)) === ['wayforpay', 'wfpms_card'],
+    'standalone mode enables fork payments without claiming the original callback or hiding the original gateway');
+delete_option('wfpms_standalone_mode_enabled');
 
 $blockRegistry = new class {
     /** @var list<object> */
@@ -206,6 +214,19 @@ wfpms_integration_assert(is_array($ibanInstructions)
     && $ibanInstructions['amount'] === (string) $purchase['amount']
     && $ibanInstructions['currency'] === (string) $purchase['currency'], 'IBAN attempt stores the seller-specific payment instructions and amount');
 
+$archivedSellerOrder = wc_create_order();
+$archivedSellerOrder->add_product(wc_get_product($product->get_id()), 1);
+$archivedSellerOrder->set_payment_method('wfpms_iban');
+$archivedSellerOrder->calculate_totals();
+$archivedSellerOrder->save();
+$archivedPurchase = WfpMultiSeller\OrderPurchaseService::finalize((int) $archivedSellerOrder->get_id());
+wfpms_integration_assert(SellerRepository::archive((int) $sellerIds[0]), 'seller can be archived for payment-attempt protection test');
+$archivedSellerResult = $bankGateway->process_payment((int) $archivedSellerOrder->get_id());
+wfpms_integration_assert(($archivedSellerResult['result'] ?? '') === 'failure'
+    && WfpMultiSeller\PurchaseRepository::attempts_for_purchase((int) $archivedPurchase['id']) === [],
+    'archiving a seller blocks new IBAN attempts for its existing purchases');
+$wpdb->update(SellerRepository::sellers_table(), ['active' => 1], ['id' => $sellerIds[0]]);
+
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
 update_option('wfpms_integration_iban_order_id', (int) $order->get_id(), false);
 update_option('wfpms_integration_iban_expires_at', (string) $purchase['expires_at'], false);
@@ -220,8 +241,38 @@ add_filter('pre_schedule_event', $rejectSchedule, 10, 3);
 WfpMultiSeller\PurchaseExecutionService::schedule((int) $purchase['id']);
 remove_filter('pre_schedule_event', $rejectSchedule, 10);
 wfpms_integration_assert(!wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'failed one-off execution scheduling leaves no event');
+
+$expiredBallastIds = [];
+$expiredAt = gmdate('Y-m-d H:i:s', current_time('timestamp', true) - 3600);
+for ($index = 1; $index <= 100; $index++) {
+    $inserted = $wpdb->insert(WfpMultiSeller\PurchaseRepository::purchases_table(), [
+        'order_id' => 900000 + $index,
+        'seller_id' => $sellerIds[0],
+        'config_id' => (int) $purchase['config_id'],
+        'financial_snapshot' => '{}',
+        'snapshot_hash' => hash('sha256', '{}'),
+        'amount' => '1.00',
+        'currency' => 'UAH',
+        'state' => 'expired',
+        'expires_at' => $expiredAt,
+        'created_at' => $expiredAt,
+        'updated_at' => $expiredAt,
+    ]);
+    wfpms_integration_assert($inserted === 1, 'expired queue ballast fixture can be created');
+    $expiredBallastIds[] = (int) $wpdb->insert_id;
+}
+$wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
+    'state' => 'awaiting_payment',
+    'expires_at' => $expiredAt,
+    'updated_at' => $expiredAt,
+], ['id' => (int) $purchase['id']]);
 WfpMultiSeller\PurchaseExecutionService::expire_due();
 wfpms_integration_assert(wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'hourly recovery schedules paid purchases whose execution remained pending');
+wfpms_integration_assert((string) WfpMultiSeller\PurchaseRepository::for_order((int) $order->get_id())['state'] === 'expired',
+    'old expired purchases do not starve newly due purchases from the expiry queue');
+foreach ($expiredBallastIds as $expiredBallastId) {
+    $wpdb->delete(WfpMultiSeller\PurchaseRepository::purchases_table(), ['id' => $expiredBallastId]);
+}
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
 $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'state' => 'awaiting_payment',
