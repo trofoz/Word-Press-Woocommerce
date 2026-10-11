@@ -91,6 +91,9 @@ final class BankTransferGateway extends \WC_Payment_Gateway
             if (!LegacyMigration::is_transition_enabled()) {
                 throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
             }
+            if (!PaymentOperations::payment_allowed_for_order($orderId)) {
+                throw new \RuntimeException('New seller sales are currently paused.');
+            }
             $purchase = OrderPurchaseService::finalize($orderId);
             $instructions = self::issue_instructions($orderId, (int) $purchase['id']);
             $order = wc_get_order($orderId);
@@ -163,7 +166,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
     private static function issue_instructions(int $orderId, int $purchaseId): array
     {
         global $wpdb;
-        if (!LegacyMigration::is_transition_enabled()) {
+        if (!LegacyMigration::is_transition_enabled() || !PaymentOperations::payment_allowed_for_order($orderId)) {
             throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
         }
         if (!PurchaseRepository::order_lock($orderId)) {

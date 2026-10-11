@@ -2,6 +2,9 @@
 
 use WfpMultiSeller\LegacyMigration;
 use WfpMultiSeller\OrderPurchaseService;
+use WfpMultiSeller\PaymentOperations;
+use WfpMultiSeller\BankTransferGateway;
+use WfpMultiSeller\WayForPayGateway;
 use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
@@ -188,12 +191,68 @@ update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $activeGateways = LegacyMigration::filter_gateways($gateways);
 wfpms_legacy_assert(!isset($activeGateways['wayforpay']) && isset($activeGateways['wfpms_card']) && isset($activeGateways['wfpms_iban']),
     'enabling the transition hides upstream WayForPay and exposes fork gateways');
+
+update_option('wfpms_sales_paused', 'yes', false);
+$pauseFiltered = OrderPurchaseService::filter_cart_gateways($gateways);
+$newOrder = wc_create_order();
+$newOrder->set_status('pending');
+$newOrder->set_payment_method('wfpms_card');
+$newOrder->add_product($product, 1);
+$newOrder->calculate_totals();
+$newOrder->save();
+$cardGateway = new WayForPayGateway();
+$cardGateway->enabled = 'yes';
+$ibanGateway = new BankTransferGateway();
+$ibanGateway->enabled = 'yes';
+$cardResult = $cardGateway->process_payment((int) $newOrder->get_id());
+$ibanResult = $ibanGateway->process_payment((int) $newOrder->get_id());
+$finalizeBlocked = false;
+try {
+    OrderPurchaseService::finalize((int) $newOrder->get_id());
+} catch (RuntimeException $error) {
+    $finalizeBlocked = str_contains($error->getMessage(), 'paused');
+}
+wfpms_legacy_assert(PaymentOperations::sales_paused()
+    && PaymentOperations::payment_allowed_for_order((int) $legacyOrder->get_id())
+    && !PaymentOperations::payment_allowed_for_order((int) $newOrder->get_id())
+    && $pauseFiltered === []
+    && ($cardResult['result'] ?? '') === 'failure' && ($ibanResult['result'] ?? '') === 'failure'
+    && $finalizeBlocked
+    && PurchaseRepository::for_order((int) $newOrder->get_id()) === null,
+    'sales pause hides checkout gateways, blocks direct payment through both gateways, and preserves existing mapped orders');
+update_option('wfpms_sales_paused', 'no', false);
+
+$lateOrder = wc_create_order();
+$lateOrder->set_status('pending');
+$lateOrder->set_payment_method('wayforpay');
+$lateOrder->add_product($product, 1);
+$lateOrder->calculate_totals();
+$lateOrder->save();
+$lateCallback = [
+    'merchantAccount' => $merchant,
+    'orderReference' => (string) $lateOrder->get_id() . '_woo_w4p_1',
+    'amount' => (string) $lateOrder->get_total(),
+    'currency' => (string) $lateOrder->get_currency(),
+    'authCode' => 'AUTH-LATE-LEGACY',
+    'cardPan' => '411111******1111',
+    'transactionStatus' => 'Approved',
+    'reasonCode' => '1100',
+];
+$lateCallback['merchantSignature'] = hash_hmac('md5', implode(';', array_map('strval', [
+    $lateCallback['merchantAccount'], $lateCallback['orderReference'], $lateCallback['amount'], $lateCallback['currency'],
+    $lateCallback['authCode'], $lateCallback['cardPan'], $lateCallback['transactionStatus'], $lateCallback['reasonCode'],
+])), $secret);
 $postCutoverCallback = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
     'timeout' => 10,
     'headers' => ['Content-Type' => 'application/json'],
-    'body' => wp_json_encode($callback),
+    'body' => wp_json_encode($lateCallback),
 ]);
-wfpms_legacy_assert(!is_wp_error($postCutoverCallback) && wp_remote_retrieve_response_code($postCutoverCallback) === 400,
-    'after cutover, an un-migrated legacy callback is rejected instead of falling through to the original handler');
+$lateOrderId = (int) $lateOrder->get_id();
+wp_cache_delete($lateOrderId, 'orders');
+clean_post_cache($lateOrderId);
+$lateOrder = wc_get_order($lateOrderId);
+wfpms_legacy_assert(!is_wp_error($postCutoverCallback) && wp_remote_retrieve_response_code($postCutoverCallback) === 200
+    && $lateOrder instanceof WC_Order && $lateOrder->is_paid(),
+    'after cutover, an unmapped legacy callback still reaches the original gateway and completes its old order');
 
 echo "PASS: legacy order migration, invalid-order rejection, and callback/gateway ownership transition\n";

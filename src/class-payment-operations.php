@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace WfpMultiSeller;
 
-/** Operator controls for bank receipts, payment deadlines, and review decisions. */
+/** Operator controls for sales pause, receipts, refunds, deadlines, and review decisions. */
 final class PaymentOperations
 {
     private const CAPABILITY = 'manage_woocommerce';
@@ -11,8 +11,10 @@ final class PaymentOperations
     public static function boot(): void
     {
         add_action('admin_menu', [self::class, 'register_page']);
+        add_action('admin_post_wfpms_set_sales_pause', [self::class, 'set_sales_pause']);
         add_action('admin_post_wfpms_save_payment_policy', [self::class, 'save_policy']);
         add_action('admin_post_wfpms_confirm_bank_receipt', [self::class, 'confirm_bank_receipt']);
+        add_action('admin_post_wfpms_record_refund', [self::class, 'record_refund']);
         add_action('admin_post_wfpms_review_receipt', [self::class, 'review_receipt']);
         add_action('admin_post_wfpms_acknowledge_execution', [self::class, 'acknowledge_execution']);
     }
@@ -20,6 +22,17 @@ final class PaymentOperations
     public static function zero_total_enabled(): bool
     {
         return get_option('wfpms_allow_zero_total', 'no') === 'yes';
+    }
+
+    public static function sales_paused(): bool
+    {
+        return get_option('wfpms_sales_paused', 'no') === 'yes';
+    }
+
+    /** Pause applies to new purchases only; already finalized orders can still be paid. */
+    public static function payment_allowed_for_order(int $orderId): bool
+    {
+        return !self::sales_paused() || PurchaseRepository::for_order($orderId) !== null;
     }
 
     public static function timeout_seconds(string $channel): int
@@ -88,25 +101,167 @@ final class PaymentOperations
         $notice = isset($_GET['wfpms_payment_notice']) && is_scalar($_GET['wfpms_payment_notice'])
             ? sanitize_key(wp_unslash((string) $_GET['wfpms_payment_notice'])) : '';
         $messages = [
+            'sales_paused' => __('Нові продажі призупинено. Уже створені платіжні зобов’язання залишаються доступними.', 'wayforpay-multi-seller'),
+            'sales_resumed' => __('Нові продажі відновлено.', 'wayforpay-multi-seller'),
+            'refund_recorded' => __('Повернення зафіксовано в журналі. Переказ коштів не виконувався.', 'wayforpay-multi-seller'),
+            'refund_duplicate' => __('Цей зовнішній ID повернення вже зафіксовано з тими самими даними.', 'wayforpay-multi-seller'),
             'saved' => __('Політику платежів збережено.', 'wayforpay-multi-seller'),
             'receipt_saved' => __('Банківське надходження записано.', 'wayforpay-multi-seller'),
             'duplicate_receipt' => __('Це банківське надходження вже зареєстровано.', 'wayforpay-multi-seller'),
             'receipt_reviewed' => __('Надходження прийнято після перевірки; передано до штатного виконання WooCommerce.', 'wayforpay-multi-seller'),
             'execution_reviewed' => __('Стан позначено перевіреним. Автоматичного повтору виконання не було.', 'wayforpay-multi-seller'),
             'invalid_data' => __('Дані платежу неповні або некоректні.', 'wayforpay-multi-seller'),
-            'operation_conflict' => __('Цей банківський ID уже прив’язано до іншого запису або його дані суперечать наявним.', 'wayforpay-multi-seller'),
+            'operation_conflict' => __('Зовнішній ідентифікатор уже використано з іншими даними.', 'wayforpay-multi-seller'),
             'order_unavailable' => __('Замовлення не має чинного знімка продавця або платіж не можна зарахувати автоматично.', 'wayforpay-multi-seller'),
             'save_failed' => __('Не вдалося зберегти платіжну подію. Спробуйте ще раз.', 'wayforpay-multi-seller'),
         ];
         if (isset($messages[$notice])) {
-            echo '<div class="notice ' . esc_attr(in_array($notice, ['saved', 'receipt_saved', 'receipt_reviewed', 'execution_reviewed', 'duplicate_receipt'], true) ? 'notice-success' : 'notice-error') . '"><p>'
+            echo '<div class="notice ' . esc_attr(in_array($notice, ['saved', 'receipt_saved', 'receipt_reviewed', 'execution_reviewed', 'duplicate_receipt', 'refund_recorded', 'refund_duplicate', 'sales_paused', 'sales_resumed'], true) ? 'notice-success' : 'notice-error') . '"><p>'
                 . esc_html($messages[$notice]) . '</p></div>';
         }
         echo '<div class="wrap"><h1>' . esc_html__('Платежі та ручний розгляд', 'wayforpay-multi-seller') . '</h1>';
+        self::render_sales_pause_control();
         self::render_policy_form();
         self::render_receipt_form();
+        self::render_refund_form();
+        self::render_refund_history();
         self::render_review_queue();
         echo '</div>';
+    }
+
+    public static function set_sales_pause(): void
+    {
+        self::authorize_post('wfpms_set_sales_pause');
+        if (!LegacyMigration::is_transition_enabled() || !isset($_POST['sales_paused']) || !is_scalar($_POST['sales_paused'])
+            || !in_array((string) wp_unslash($_POST['sales_paused']), ['yes', 'no'], true)) {
+            self::redirect('invalid_data');
+        }
+        $paused = (string) wp_unslash($_POST['sales_paused']) === 'yes';
+        update_option('wfpms_sales_paused', $paused ? 'yes' : 'no', false);
+        self::redirect($paused ? 'sales_paused' : 'sales_resumed');
+    }
+
+    public static function record_refund(): void
+    {
+        global $wpdb;
+        self::authorize_post('wfpms_record_refund');
+        $receiptId = self::post_int('receipt_id');
+        $refundId = self::post_opaque('refund_id', 191);
+        $amountRaw = self::post_text('amount', 64);
+        $currency = strtoupper(self::post_text('currency', 3));
+        $occurredAt = self::post_datetime_utc('occurred_at');
+        $proofReference = self::post_opaque('proof_reference', 191);
+        $reason = self::post_text('reason', 500);
+        if ($receiptId < 1 || $refundId === '' || $amountRaw === ''
+            || preg_match('/\\A[A-Z]{3}\\z/', $currency) !== 1 || $occurredAt === null
+            || $proofReference === '' || $reason === '') {
+            self::redirect('invalid_data');
+        }
+
+        $receipt = self::receipt_by_id($receiptId);
+        if ($receipt === null) {
+            self::redirect('order_unavailable');
+        }
+        $purchase = self::purchase_by_id((int) $receipt['purchase_id']);
+        if ($purchase === null || !PurchaseRepository::order_lock((int) $purchase['order_id'])) {
+            self::redirect('save_failed');
+        }
+        try {
+            if ($wpdb->query('START TRANSACTION') === false) {
+                self::redirect('save_failed');
+            }
+            $lockedPurchase = PurchaseRepository::for_order((int) $purchase['order_id'], true);
+            $lockedReceipt = $wpdb->get_row($wpdb->prepare(
+                'SELECT * FROM ' . PurchaseRepository::receipts_table() . ' WHERE id=%d FOR UPDATE', $receiptId
+            ), ARRAY_A);
+            $snapshot = $lockedPurchase ? json_decode((string) $lockedPurchase['financial_snapshot'], true) : null;
+            $scale = is_array($snapshot) ? (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()) : -1;
+            $amountParts = [];
+            $hasExactScale = $scale >= 0 && preg_match('/\\A\\d+(?:\\.(\\d+))?\\z/', $amountRaw, $amountParts) === 1
+                && strlen($amountParts[1] ?? '') <= $scale;
+            $refundAmount = $hasExactScale ? wc_format_decimal($amountRaw, $scale, false) : false;
+            if ($lockedPurchase === null || !is_array($lockedReceipt) || !is_array($snapshot)
+                || (int) $lockedReceipt['purchase_id'] !== (int) $lockedPurchase['id']
+                || (string) $lockedReceipt['classification'] === 'rejected'
+                || !in_array((string) $lockedReceipt['transaction_status'], ['Approved', 'OperatorConfirmed'], true)
+                || !is_string($refundAmount)
+                || preg_match('/\\A\\d{1,14}(?:\\.\\d{1,6})?\\z/', $refundAmount) !== 1
+                || preg_match('/\\A0+(?:\\.0+)?\\z/', $refundAmount) === 1
+                || $currency !== (string) $lockedReceipt['currency']) {
+                $wpdb->query('ROLLBACK');
+                self::redirect('invalid_data');
+            }
+
+            $refundUnits = self::decimal_units($refundAmount, $scale);
+            $grossUnits = self::decimal_units((string) $lockedReceipt['amount'], $scale);
+            if ($refundUnits === null || $grossUnits === null) {
+                $wpdb->query('ROLLBACK');
+                self::redirect('invalid_data');
+            }
+            $dedupe = hash('sha256', 'refund:' . $receiptId . ':' . $refundId);
+            $existing = $wpdb->get_row($wpdb->prepare(
+                'SELECT evidence,reason FROM ' . PurchaseRepository::events_table() . ' WHERE dedupe_key=%s FOR UPDATE', $dedupe
+            ), ARRAY_A);
+            $evidence = [
+                'refund_id' => $refundId,
+                'amount' => $refundAmount,
+                'currency' => $currency,
+                'occurred_at' => $occurredAt,
+                'proof_reference' => $proofReference,
+            ];
+            $evidenceJson = wp_json_encode($evidence, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (!is_string($evidenceJson)) {
+                throw new \RuntimeException('Could not encode refund evidence.');
+            }
+            if (is_array($existing)) {
+                $same = hash_equals((string) $existing['evidence'], $evidenceJson)
+                    && hash_equals((string) $existing['reason'], $reason);
+                $wpdb->query('ROLLBACK');
+                self::redirect($same ? 'refund_duplicate' : 'operation_conflict');
+            }
+
+            $events = $wpdb->get_col($wpdb->prepare(
+                'SELECT evidence FROM ' . PurchaseRepository::events_table()
+                . ' WHERE receipt_id=%d AND kind=%s FOR UPDATE', $receiptId, 'refund_recorded'
+            ));
+            if (!is_array($events)) {
+                throw new \RuntimeException('Could not read previous refund events.');
+            }
+            $refundedUnits = '0';
+            foreach ($events as $eventJson) {
+                $eventData = json_decode((string) $eventJson, true);
+                $previousUnits = is_array($eventData) && isset($eventData['amount'])
+                    ? self::decimal_units((string) $eventData['amount'], $scale) : null;
+                if ($previousUnits === null) {
+                    throw new \RuntimeException('A previous refund event is invalid.');
+                }
+                $refundedUnits = self::add_units($refundedUnits, $previousUnits);
+            }
+            if (self::compare_units(self::add_units($refundedUnits, $refundUnits), $grossUnits) > 0) {
+                $wpdb->query('ROLLBACK');
+                self::redirect('invalid_data');
+            }
+
+            $eventId = self::insert_refund_event(
+                (int) $lockedPurchase['id'],
+                (int) $lockedReceipt['attempt_id'],
+                $receiptId,
+                $dedupe,
+                $evidenceJson,
+                $reason,
+                get_current_user_id(),
+                (int) $lockedReceipt['first_event_id']
+            );
+            if ($eventId < 1 || $wpdb->query('COMMIT') === false) {
+                throw new \RuntimeException('Could not commit refund evidence.');
+            }
+        } catch (\Throwable $error) {
+            $wpdb->query('ROLLBACK');
+            self::redirect('save_failed');
+        } finally {
+            PurchaseRepository::release_order_lock((int) $purchase['order_id']);
+        }
+        self::redirect('refund_recorded');
     }
 
     public static function save_policy(): void
@@ -432,6 +587,25 @@ final class PaymentOperations
         echo '</form>';
     }
 
+    private static function render_sales_pause_control(): void
+    {
+        $paused = self::sales_paused();
+        echo '<hr><h2>' . esc_html__('Стан продажів', 'wayforpay-multi-seller') . '</h2>';
+        if (!LegacyMigration::is_transition_enabled()) {
+            echo '<p>' . esc_html__('Керування паузою стане доступним після завершення переходу на шлюзи форку.', 'wayforpay-multi-seller') . '</p>';
+            return;
+        }
+        echo '<p>' . esc_html($paused
+            ? __('Продажі призупинені. Нові покупки не приймаються; вже створені замовлення можна оплатити.', 'wayforpay-multi-seller')
+            : __('Продажі активні.', 'wayforpay-multi-seller')) . '</p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="wfpms_set_sales_pause">';
+        echo '<input type="hidden" name="sales_paused" value="' . esc_attr($paused ? 'no' : 'yes') . '">';
+        wp_nonce_field('wfpms_set_sales_pause');
+        submit_button($paused ? __('Відновити продажі', 'wayforpay-multi-seller') : __('Призупинити нові продажі', 'wayforpay-multi-seller'));
+        echo '</form>';
+    }
+
     private static function render_receipt_form(): void
     {
         echo '<hr><h2>' . esc_html__('Підтвердити банківське надходження', 'wayforpay-multi-seller') . '</h2>';
@@ -450,6 +624,94 @@ final class PaymentOperations
         }
         submit_button(__('Зафіксувати надходження', 'wayforpay-multi-seller'));
         echo '</form>';
+    }
+
+    private static function render_refund_form(): void
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT r.id,r.amount,r.currency,r.source,p.order_id FROM ' . PurchaseRepository::receipts_table()
+            . ' r INNER JOIN ' . PurchaseRepository::purchases_table() . ' p ON p.id=r.purchase_id'
+            . ' WHERE r.transaction_status IN (%s,%s) AND r.classification<>%s'
+            . ' ORDER BY r.id DESC LIMIT 100',
+            'Approved', 'OperatorConfirmed', 'rejected'
+        ), ARRAY_A);
+        echo '<hr><h2>' . esc_html__('Зафіксувати зовнішнє повернення', 'wayforpay-multi-seller') . '</h2>';
+        echo '<p>' . esc_html__('Спершу виконайте або перевірте повернення у відповідному кабінеті. Ця форма лише додає доказ до фінансового журналу й не переказує кошти та не змінює стан виконання замовлення.', 'wayforpay-multi-seller') . '</p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+        echo '<input type="hidden" name="action" value="wfpms_record_refund">';
+        wp_nonce_field('wfpms_record_refund');
+        echo '<p><label>' . esc_html__('Надходження', 'wayforpay-multi-seller') . ' <select required name="receipt_id"><option value="">'
+            . esc_html__('Оберіть надходження', 'wayforpay-multi-seller') . '</option>';
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            echo '<option value="' . esc_attr((string) $row['id']) . '">' . esc_html(sprintf(
+                'Receipt #%1$d · order #%2$d · %3$s %4$s · %5$s',
+                (int) $row['id'], (int) $row['order_id'], (string) $row['amount'], (string) $row['currency'], (string) $row['source']
+            )) . '</option>';
+        }
+        echo '</select></label></p>';
+        $fields = [
+            'refund_id' => ['Зовнішній ID повернення', 'text'],
+            'amount' => ['Повернута сума', 'text'],
+            'currency' => ['Валюта', 'text'],
+            'occurred_at' => ['Час повернення', 'datetime-local'],
+            'proof_reference' => ['Посилання або номер доказу', 'text'],
+            'reason' => ['Підстава / коментар', 'text'],
+        ];
+        foreach ($fields as $name => [$label, $type]) {
+            echo '<p><label>' . esc_html__($label, 'wayforpay-multi-seller') . ' <input required type="' . esc_attr($type)
+                . '" name="' . esc_attr($name) . '" maxlength="500"></label></p>';
+        }
+        submit_button(__('Записати доказ повернення', 'wayforpay-multi-seller'));
+        echo '</form>';
+    }
+
+    private static function render_refund_history(): void
+    {
+        global $wpdb;
+        $events = $wpdb->get_results($wpdb->prepare(
+            'SELECT e.received_at,e.actor_id,e.reason,e.evidence,r.id AS receipt_id,r.amount AS gross_amount,'
+            . 'r.currency,p.order_id FROM ' . PurchaseRepository::events_table() . ' e'
+            . ' INNER JOIN ' . PurchaseRepository::receipts_table() . ' r ON r.id=e.receipt_id'
+            . ' INNER JOIN ' . PurchaseRepository::purchases_table() . ' p ON p.id=e.purchase_id'
+            . ' WHERE e.kind=%s ORDER BY e.id DESC LIMIT 100',
+            'refund_recorded'
+        ),
+            ARRAY_A
+        );
+        $actorIds = is_array($events)
+            ? array_values(array_unique(array_filter(array_map(static fn(array $event): int => (int) $event['actor_id'], $events))))
+            : [];
+        $operators = [];
+        foreach ($actorIds === [] ? [] : get_users(['include' => $actorIds, 'number' => count($actorIds)]) as $operator) {
+            if ($operator instanceof \WP_User) {
+                $operators[(int) $operator->ID] = (string) $operator->display_name;
+            }
+        }
+        echo '<h3>' . esc_html__('Журнал повернень', 'wayforpay-multi-seller') . '</h3>';
+        echo '<table class="widefat striped"><thead><tr><th>' . esc_html__('Дата запису', 'wayforpay-multi-seller') . '</th><th>'
+            . esc_html__('Замовлення / надходження', 'wayforpay-multi-seller') . '</th><th>' . esc_html__('Повернення', 'wayforpay-multi-seller')
+            . '</th><th>' . esc_html__('ID і дата операції', 'wayforpay-multi-seller') . '</th><th>' . esc_html__('Оператор', 'wayforpay-multi-seller') . '</th><th>' . esc_html__('Підстава', 'wayforpay-multi-seller')
+            . '</th><th>' . esc_html__('Доказ', 'wayforpay-multi-seller') . '</th></tr></thead><tbody>';
+        if (!is_array($events) || $events === []) {
+            echo '<tr><td colspan="7">' . esc_html__('Записаних повернень немає.', 'wayforpay-multi-seller') . '</td></tr>';
+        }
+        foreach (is_array($events) ? $events : [] as $event) {
+            $evidence = json_decode((string) $event['evidence'], true);
+            if (!is_array($evidence)) {
+                $evidence = [];
+            }
+            $actorId = (int) $event['actor_id'];
+            $operator = isset($operators[$actorId]) ? $operators[$actorId] . ' (#' . $actorId . ')'
+                : 'User #' . $actorId;
+            echo '<tr><td>' . esc_html((string) $event['received_at']) . '</td><td>'
+                . esc_html(sprintf('#%1$d / receipt #%2$d · gross %3$s %4$s', (int) $event['order_id'], (int) $event['receipt_id'], (string) $event['gross_amount'], (string) $event['currency']))
+                . '</td><td>' . esc_html((string) ($evidence['amount'] ?? '—') . ' ' . (string) ($evidence['currency'] ?? ''))
+                . '</td><td>' . esc_html((string) ($evidence['refund_id'] ?? '—') . ' · ' . (string) ($evidence['occurred_at'] ?? '—'))
+                . '</td><td>' . esc_html($operator) . '</td><td>' . esc_html((string) $event['reason'])
+                . '</td><td>' . esc_html((string) ($evidence['proof_reference'] ?? '—')) . '</td></tr>';
+        }
+        echo '</tbody></table>';
     }
 
     private static function render_review_queue(): void
@@ -480,6 +742,14 @@ final class PaymentOperations
             }
             foreach (PurchaseRepository::events_for_purchase((int) $purchase['id']) as $event) {
                 $evidence = json_decode((string) $event['evidence'], true);
+                if ((string) $event['kind'] === 'refund_recorded' && is_array($evidence)) {
+                    $details[] = sprintf(
+                        __('Повернення %1$s %2$s · ID %3$s', 'wayforpay-multi-seller'),
+                        (string) ($evidence['amount'] ?? '—'),
+                        (string) ($evidence['currency'] ?? ''),
+                        (string) ($evidence['refund_id'] ?? '—')
+                    );
+                }
                 if (is_array($evidence) && ($evidence['merchant_account_matches'] ?? true) === false) {
                     $details[] = sprintf(
                         __('Merchant mismatch: received %1$s; expected %2$s', 'wayforpay-multi-seller'),
@@ -622,6 +892,77 @@ final class PaymentOperations
         global $wpdb;
         $row = $wpdb->get_row($wpdb->prepare('SELECT * FROM ' . PurchaseRepository::purchases_table() . ' WHERE id=%d', $purchaseId), ARRAY_A);
         return is_array($row) ? $row : null;
+    }
+
+    private static function receipt_by_id(int $receiptId): ?array
+    {
+        global $wpdb;
+        $row = $wpdb->get_row($wpdb->prepare(
+            'SELECT * FROM ' . PurchaseRepository::receipts_table() . ' WHERE id=%d', $receiptId
+        ), ARRAY_A);
+        return is_array($row) ? $row : null;
+    }
+
+    private static function insert_refund_event(
+        int $purchaseId,
+        int $attemptId,
+        int $receiptId,
+        string $dedupe,
+        string $evidence,
+        string $reason,
+        int $actorId,
+        int $relatedEventId
+    ): int {
+        global $wpdb;
+        $inserted = $wpdb->insert(PurchaseRepository::events_table(), [
+            'purchase_id' => $purchaseId,
+            'attempt_id' => $attemptId,
+            'receipt_id' => $receiptId,
+            'dedupe_key' => $dedupe,
+            'kind' => 'refund_recorded',
+            'actor_id' => $actorId,
+            'reason' => $reason,
+            'related_event_id' => $relatedEventId,
+            'evidence' => $evidence,
+            'received_at' => current_time('mysql', true),
+        ]);
+        return $inserted === 1 ? (int) $wpdb->insert_id : 0;
+    }
+
+    /** Convert a non-negative decimal to an arbitrary-size integer string at the requested scale. */
+    private static function decimal_units(string $amount, int $scale): ?string
+    {
+        if ($scale < 0 || $scale > 6 || preg_match('/\\A(\\d+)(?:\\.(\\d+))?\\z/', $amount, $matches) !== 1) {
+            return null;
+        }
+        $fraction = $matches[2] ?? '';
+        if (strlen($fraction) > $scale) {
+            return null;
+        }
+        $units = ltrim($matches[1] . str_pad($fraction, $scale, '0'), '0');
+        return $units === '' ? '0' : $units;
+    }
+
+    private static function compare_units(string $left, string $right): int
+    {
+        $left = ltrim($left, '0') ?: '0';
+        $right = ltrim($right, '0') ?: '0';
+        return strlen($left) <=> strlen($right) ?: strcmp($left, $right);
+    }
+
+    private static function add_units(string $left, string $right): string
+    {
+        $leftIndex = strlen($left) - 1;
+        $rightIndex = strlen($right) - 1;
+        $carry = 0;
+        $sum = '';
+        while ($leftIndex >= 0 || $rightIndex >= 0 || $carry > 0) {
+            $digit = ($leftIndex >= 0 ? (int) $left[$leftIndex--] : 0)
+                + ($rightIndex >= 0 ? (int) $right[$rightIndex--] : 0) + $carry;
+            $sum = (string) ($digit % 10) . $sum;
+            $carry = intdiv($digit, 10);
+        }
+        return ltrim($sum, '0') ?: '0';
     }
 
     private static function insert_event(int $purchaseId, int $attemptId, int $receiptId, string $kind, array $evidence, string $reason, int $actorId, int $relatedEventId = 0): int

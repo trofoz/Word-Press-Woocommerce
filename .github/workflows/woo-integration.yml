@@ -139,6 +139,10 @@ jobs:
             WFPMS_BANK_RECEIPT_CASE="$receipt_case" \
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-bank-receipt.php" --path="$WP_PATH"
           done
+          for refund_case in create duplicate over_limit; do
+            WFPMS_REFUND_CASE="$refund_case" \
+              wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-record.php" --path="$WP_PATH"
+          done
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-schema-upgrade.php" --path="$WP_PATH"
           WFPMS_BASE_URL=http://127.0.0.1:8099 \

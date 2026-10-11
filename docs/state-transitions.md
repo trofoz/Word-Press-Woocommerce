@@ -4,6 +4,8 @@
 
 ## Незалежні стани
 
+Окремо від життєвого циклу окремого замовлення магазин має стан продажів `active/paused`. Пауза блокує новий checkout і створення purchase, але не скасовує callback-и, повторну оплату вже зафіксованого purchase, звірку надходжень чи виконання.
+
 | Об'єкт | Стани | Що не означає |
 |---|---|---|
 | Purchase | prepared, payable, accepted, free, expired, cancelled, review | Accepted не доводить завершення LMS |
@@ -11,6 +13,10 @@
 | Receipt classification | accepted, duplicate-payment, mismatch, late, review | Mismatch не стає оплаченим замовленням |
 | Execution | none, pending, running, done, review | Done означає результат власного Woo-процесу, не всіх сторонніх ефектів |
 | Refund | Незмінні події з projection returned total/review | Refund зайвого receipt не забирає доступ до прийнятої покупки |
+
+Повернення записується як окрема подія до конкретного receipt після перевірки в зовнішньому кабінеті. Форк не відправляє гроші; повтор того самого refund ID не створює нової події, а накопичена сума не може перевищувати gross конкретного receipt.
+
+Після cutover callback зі збереженим migration mapping перевіряє фінансове ядро форку. Callback без mapping передається далі оригінальному WayForPay gateway, який має залишатися встановленим і активним для завершення обробки його старих замовлень. Міграційна перевірка блокує cutover, поки лишаються відкриті неоплачені legacy-замовлення.
 
 Скасування після accepted не стирає accepted_receipt_id і не робить можливим новий платіж. Повернення/доставка мають власні рішення; purchase state не замінює Woo order status.
 
