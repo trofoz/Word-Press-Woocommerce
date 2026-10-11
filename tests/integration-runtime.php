@@ -280,6 +280,7 @@ foreach ($expiredBallastIds as $expiredBallastId) {
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
 $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'state' => 'awaiting_payment',
+    'expires_at' => (string) $purchase['expires_at'],
     'execution_state' => 'none',
     'updated_at' => current_time('mysql', true),
 ], ['id' => (int) $purchase['id']]);
