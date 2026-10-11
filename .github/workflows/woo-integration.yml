@@ -66,6 +66,7 @@ jobs:
           wp config create --path="$WP_PATH" \
             --dbname=wordpress_test --dbuser=wordpress --dbpass=wordpress-test-only \
             --dbhost=127.0.0.1 --dbprefix=wptest_ --skip-check
+          wp config set DISABLE_WP_CRON true --raw --path="$WP_PATH" >/dev/null
           wp core install --path="$WP_PATH" --url=http://127.0.0.1:8099 \
             --title='Disposable WayForPay integration test' \
             --admin_user=test-admin --admin_password=test-only-admin-password \
