@@ -386,25 +386,33 @@ $distinctAttemptReceipts = $wpdb->get_results($wpdb->prepare(
 ), ARRAY_A);
 $distinctAttemptsExecutionArgs = [(int) $distinctAttemptsPurchase['id']];
 $executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $distinctAttemptsExecutionArgs);
+wfpms_callback_integration_assert($executionWasScheduled,
+    'The first accepted callback schedules one-time purchase execution.');
 if ($executionWasScheduled) {
-    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
-    // A retried/delivered-twice queue action must not complete the order twice.
     do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
 }
 wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
-wfpms_callback_integration_assert($executionWasScheduled
-    && is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
+wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
     && (string) $distinctAttemptReceipts[0]['provider_reference'] === (string) $firstDistinctAttempt['external_reference']
     && (string) $distinctAttemptReceipts[1]['provider_reference'] === (string) $secondDistinctAttempt['external_reference']
     && (string) $distinctAttemptReceipts[0]['classification'] === 'accepted'
     && (string) $distinctAttemptReceipts[1]['classification'] === 'needs_review'
-    && $distinctAttemptsPurchase !== null && (int) $distinctAttemptsPurchase['accepted_receipt_id'] === (int) $distinctAttemptReceipts[0]['id']
+    && $distinctAttemptsPurchase !== null && (int) $distinctAttemptsPurchase['accepted_receipt_id'] === (int) $distinctAttemptReceipts[0]['id'],
+    'Two distinct signed Approved attempts retain both receipts, accepting only the first.');
+if ($executionWasScheduled) {
+    // A retried/delivered-twice queue action must not complete the order twice.
+    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
+}
+$distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
+$distinctAttemptsOrder = wc_get_order((int) $distinctAttemptsOrder->get_id());
+wfpms_callback_integration_assert($distinctAttemptsPurchase !== null
     && (string) $distinctAttemptsPurchase['execution_state'] === 'done'
+    && $distinctAttemptsOrder instanceof WC_Order && $distinctAttemptsOrder->is_paid()
     && (int) $wpdb->get_var($wpdb->prepare(
         'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
         (int) $distinctAttemptsPurchase['id'], 'execution_done'
     )) === 1,
-    'Two distinct signed Approved attempts retain both receipts, accept only the first, and execute fulfillment once.');
+    'The scheduled execution pays once and a duplicate execution action is ignored.');
 
 echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, same-attempt conflict exceptions, credential rotation, amount and currency mismatches, terminal-status protection, distinct-attempt review, and one-time WooCommerce payment completion.\n";
