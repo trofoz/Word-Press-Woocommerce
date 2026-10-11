@@ -60,6 +60,12 @@ update_option('wfpms_legacy_callback_owner', 'yes', false);
 delete_option('wfpms_legacy_transition_enabled');
 wfpms_legacy_assert(has_action('woocommerce_api_wc_wayforpay', [LegacyMigration::class, 'handle_callback']) === 0,
     'fork registers the legacy callback handler ahead of the upstream handler');
+$registeredGateways = WC()->payment_gateways()->payment_gateways();
+$upstreamGateway = $registeredGateways['wayforpay'] ?? null;
+wfpms_legacy_assert($upstreamGateway instanceof WC_Payment_Gateway && get_class($upstreamGateway) === 'WC_wayforpay',
+    'the original WayForPay plugin loads beside the fork');
+wfpms_legacy_assert(has_action('woocommerce_api_wc_wayforpay', [$upstreamGateway, 'check_wayforpay_response']) === 10,
+    'the fork callback is ordered before the original gateway callback');
 
 $productId = (int) get_option('wfpms_integration_manual_product_id', 0);
 $product = $productId > 0 ? wc_get_product($productId) : null;
@@ -74,6 +80,7 @@ $legacyOrder->save();
 OrderPurchaseService::migrate_legacy_order((int) $legacyOrder->get_id(), $sellerId, 1);
 $purchase = PurchaseRepository::for_order((int) $legacyOrder->get_id());
 $mapping = LegacyMigration::for_order((int) $legacyOrder->get_id());
+update_option('wfpms_integration_legacy_order_id', (int) $legacyOrder->get_id(), false);
 $snapshot = is_array($purchase) ? json_decode((string) $purchase['financial_snapshot'], true) : null;
 wfpms_legacy_assert($purchase !== null && (string) $purchase['state'] === 'awaiting_payment', 'legacy migration creates an awaiting-payment purchase');
 wfpms_legacy_assert($mapping !== null && (int) $mapping['seller_id'] === $sellerId && (int) $mapping['config_id'] === $configId,

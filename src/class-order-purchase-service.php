@@ -8,11 +8,14 @@ final class OrderPurchaseService
 {
     public static function boot(): void
     {
+        add_action('wp', [self::class, 'prepare_order_pay_checkout'], 1, 1);
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
+        add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_checkout_order_created', [self::class, 'finalize_checkout_order'], 10, 1);
         add_action('woocommerce_store_api_checkout_order_processed', [self::class, 'finalize_checkout_order'], 10, 1);
         add_filter('woocommerce_add_to_cart_validation', [self::class, 'validate_add_to_cart'], 10, 5);
+        add_action('woocommerce_store_api_validate_add_to_cart', [self::class, 'validate_store_api_add_to_cart'], 10, 2);
         add_filter('woocommerce_available_payment_gateways', [self::class, 'filter_cart_gateways'], 100);
         add_filter('woocommerce_gateway_title', [self::class, 'filter_gateway_title'], 10, 2);
     }
@@ -47,27 +50,43 @@ final class OrderPurchaseService
 
     public static function validate_add_to_cart(bool $passed, int $productId, int $quantity, int $variationId = 0, array $variation = [], array $cartItemData = []): bool
     {
-        if (!$passed || !function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+        if (!$passed) {
             return $passed;
         }
         $candidateId = $variationId > 0 ? $variationId : $productId;
-        $candidate = ProductRouting::resolve($candidateId);
-        if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
-            wc_add_notice(__('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller'), 'error');
+        $error = self::add_to_cart_error($candidateId);
+        if ($error !== null) {
+            wc_add_notice($error, 'error');
             return false;
         }
+        return true;
+    }
+
+    /** Prevent Store API (Cart/Checkout Blocks) from adding products from another seller. */
+    public static function validate_store_api_add_to_cart(\WC_Product $product, array $request): void
+    {
+        $error = self::add_to_cart_error((int) $product->get_id());
+        if ($error !== null) {
+            throw new \Exception($error);
+        }
+    }
+
+    private static function add_to_cart_error(int $candidateId): ?string
+    {
+        if (!function_exists('WC') || !WC()->cart || WC()->cart->is_empty()) {
+            return null;
+        }
+        $candidate = ProductRouting::resolve($candidateId);
+        if (!$candidate['ok'] || !is_int($candidate['seller_id'])) {
+            return __('Товар не має чинного призначення продавця.', 'wayforpay-multi-seller');
+        }
         foreach (WC()->cart->get_cart() as $item) {
-            $itemId = ProductRouting::cart_item_product_id($item);
-            $existing = ProductRouting::resolve($itemId);
+            $existing = ProductRouting::resolve(ProductRouting::cart_item_product_id($item));
             if (!$existing['ok'] || $existing['seller_id'] !== $candidate['seller_id']) {
-                wc_add_notice(
-                    __('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller'),
-                    'error'
-                );
-                return false;
+                return __('У кошику можуть бути товари лише одного продавця. Оформіть поточний кошик перед додаванням товару іншого продавця.', 'wayforpay-multi-seller');
             }
         }
-        return true;
+        return null;
     }
 
     public static function filter_cart_gateways(array $gateways): array
@@ -139,14 +158,6 @@ final class OrderPurchaseService
     /** Full legal recipient shown alongside each available seller payment method. */
     public static function checkout_seller_name(): string
     {
-        if (function_exists('WC') && WC()->cart && !WC()->cart->is_empty()) {
-            $resolution = self::seller_for_cart();
-            if ($resolution['ok'] && is_int($resolution['seller_id'])) {
-                $config = SellerRepository::current_config($resolution['seller_id']);
-                return $config === null ? '' : (string) $config['recipient_name'];
-            }
-            return '';
-        }
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));
             $order = $orderId > 0 ? wc_get_order($orderId) : false;
@@ -156,6 +167,14 @@ final class OrderPurchaseService
                     return (string) $snapshot['legal_name'];
                 }
             }
+        }
+        if (function_exists('WC') && WC()->cart && !WC()->cart->is_empty()) {
+            $resolution = self::seller_for_cart();
+            if ($resolution['ok'] && is_int($resolution['seller_id'])) {
+                $config = SellerRepository::current_config($resolution['seller_id']);
+                return $config === null ? '' : (string) $config['recipient_name'];
+            }
+            return '';
         }
         return '';
     }
@@ -167,6 +186,33 @@ final class OrderPurchaseService
             echo '<p class="wfpms-checkout-seller"><strong>'
                 . esc_html__('Продавець:', 'wayforpay-multi-seller') . '</strong> '
                 . esc_html($sellerName) . '</p>';
+        }
+    }
+
+    /** Route valid payment links through WooCommerce's order-pay shortcode on any checkout page. */
+    public static function prepare_order_pay_checkout($wp = null): void
+    {
+        global $wp_query;
+        if (!is_object($wp_query)
+            || !isset($_GET['order-pay'], $_GET['pay_for_order'], $_GET['key'])
+            || !is_scalar($_GET['order-pay']) || !is_scalar($_GET['pay_for_order']) || !is_scalar($_GET['key'])
+            || (string) wp_unslash((string) $_GET['pay_for_order']) !== 'true') {
+            return;
+        }
+        $orderId = absint(wp_unslash((string) $_GET['order-pay']));
+        $order = $orderId > 0 ? wc_get_order($orderId) : false;
+        $key = wc_clean(wp_unslash((string) $_GET['key']));
+        if (!$order instanceof \WC_Order || !hash_equals($order->get_order_key(), $key)) {
+            return;
+        }
+        if (is_object($wp)) {
+            $wp->query_vars['order-pay'] = $orderId;
+        }
+        $wp_query->query_vars['order-pay'] = $orderId;
+        foreach ($wp_query->posts as $post) {
+            if ($post instanceof \WP_Post) {
+                $post->post_content = '[woocommerce_checkout]';
+            }
         }
     }
 

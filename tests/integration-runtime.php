@@ -80,6 +80,8 @@ for ($index = 1; $index <= 3; $index++) {
     $sellerIds[] = (int) $wpdb->insert_id;
 }
 wfpms_integration_assert(count(SellerRepository::all(false)) === 3, 'seller registry supports three profiles');
+update_option('wfpms_integration_seller_one_id', $sellerIds[0], false);
+update_option('wfpms_integration_seller_two_id', $sellerIds[1], false);
 
 $categories = [];
 foreach (['Integration A', 'Integration B'] as $label) {
@@ -119,10 +121,40 @@ $product = new WC_Product_Simple();
 $product->set_name('Integration product');
 $product->set_status('publish');
 $product->set_regular_price('10.00');
+$product->set_virtual(true);
 $product->save();
+update_option('wfpms_integration_iban_product_id', $product->get_id(), false);
 wp_set_object_terms($product->get_id(), [$categories[0]], 'product_cat');
 $resolved = ProductRouting::resolve($product->get_id());
 wfpms_integration_assert($resolved['ok'] && $resolved['seller_id'] === $sellerIds[0] && $resolved['source'] === 'category', 'product routes to seller by category');
+
+$secondSameSellerProduct = new WC_Product_Simple();
+$secondSameSellerProduct->set_name('Second Integration Seller 1 product');
+$secondSameSellerProduct->set_status('publish');
+$secondSameSellerProduct->set_regular_price('5.00');
+$secondSameSellerProduct->set_virtual(true);
+$secondSameSellerProduct->save();
+wp_set_object_terms($secondSameSellerProduct->get_id(), [$categories[0]], 'product_cat');
+update_option('wfpms_integration_same_seller_product_2_id', $secondSameSellerProduct->get_id(), false);
+
+$unassignedProduct = new WC_Product_Simple();
+$unassignedProduct->set_name('Unassigned Integration product');
+$unassignedProduct->set_status('publish');
+$unassignedProduct->set_regular_price('7.00');
+$unassignedProduct->set_virtual(true);
+$unassignedProduct->save();
+update_option('wfpms_integration_unassigned_product_id', $unassignedProduct->get_id(), false);
+
+$conflictedProduct = new WC_Product_Simple();
+$conflictedProduct->set_name('Conflicted Integration product');
+$conflictedProduct->set_status('publish');
+$conflictedProduct->set_regular_price('8.00');
+$conflictedProduct->set_virtual(true);
+$conflictedProduct->save();
+wp_set_object_terms($conflictedProduct->get_id(), $categories, 'product_cat');
+update_option('wfpms_integration_conflicted_product_id', $conflictedProduct->get_id(), false);
+$conflictedResolution = ProductRouting::resolve($conflictedProduct->get_id());
+wfpms_integration_assert(!$conflictedResolution['ok'] && $conflictedResolution['reason'] === 'category_seller_conflict', 'conflicted product fixture resolves to an actionable audit error');
 
 $variationParent = new WC_Product_Variable();
 $variationParent->set_name('Integration variable product');

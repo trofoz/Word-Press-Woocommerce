@@ -1,4 +1,3 @@
-No syntax errors detected in tests/wayforpay-sandbox-seed.php
 <?php
 
 use WfpMultiSeller\ProductRouting;
