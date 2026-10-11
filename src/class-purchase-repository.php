@@ -68,6 +68,17 @@ final class PurchaseRepository
     }
 
     /** @return list<array<string,mixed>> */
+    public static function events_for_purchase(int $purchaseId): array
+    {
+        global $wpdb;
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT kind,evidence FROM ' . self::events_table() . ' WHERE purchase_id=%d ORDER BY id DESC LIMIT 50',
+            $purchaseId
+        ), ARRAY_A);
+        return is_array($rows) ? $rows : [];
+    }
+
+    /** @return list<array<string,mixed>> */
     public static function review_queue(int $limit = 100): array
     {
         global $wpdb;

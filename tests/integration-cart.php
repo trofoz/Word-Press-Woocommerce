@@ -1,6 +1,7 @@
 <?php
 
 use WfpMultiSeller\OrderPurchaseService;
+use WfpMultiSeller\LegacyMigration;
 use WfpMultiSeller\ProductRouting;
 
 if (!function_exists('wc_load_cart')) {
@@ -17,6 +18,20 @@ $otherSellerProductId = (int) get_option('wfpms_integration_manual_product_id', 
 if ($sameSellerProductId < 1 || $otherSellerProductId < 1) {
     throw new RuntimeException('Mixed-cart integration fixture is missing.');
 }
+
+delete_option('wfpms_legacy_callback_owner');
+delete_option('wfpms_legacy_transition_enabled');
+$setupGateways = [
+    'wfpms_card' => new stdClass(),
+    'wfpms_iban' => new stdClass(),
+    'wayforpay' => new stdClass(),
+    'bacs' => new stdClass(),
+];
+$setupVisible = LegacyMigration::filter_gateways(OrderPurchaseService::filter_cart_gateways($setupGateways));
+if (array_keys($setupVisible) !== ['wayforpay', 'bacs']) {
+    throw new RuntimeException('Before cutover, existing checkout methods must remain visible while fork methods stay paused.');
+}
+update_option('wfpms_legacy_transition_enabled', 'yes', false);
 
 $firstKey = $cart->add_to_cart($sameSellerProductId, 1);
 if (!is_string($firstKey) || $firstKey === '') {
@@ -79,4 +94,5 @@ if (!is_array($errors) || $errors === []) {
 }
 
 $cart->empty_cart();
+delete_option('wfpms_legacy_transition_enabled');
 echo "PASS: classic and Store API validation block mixed sellers, allow same-seller products, and limit gateways\n";

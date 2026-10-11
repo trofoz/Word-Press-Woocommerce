@@ -188,6 +188,11 @@ $order->save();
 $reloadedOrder = wc_get_order($order->get_id());
 wfpms_integration_assert($reloadedOrder instanceof WC_Order && $reloadedOrder->get_payment_method() === 'wfpms_iban', 'WooCommerce order persists and reloads via the active order store');
 $bankGateway = new WfpMultiSeller\BankTransferGateway();
+$pausedBankResult = $bankGateway->process_payment($order->get_id());
+wfpms_integration_assert(($pausedBankResult['result'] ?? '') === 'failure'
+    && WfpMultiSeller\PurchaseRepository::for_order((int) $order->get_id()) === null,
+    'Direct IBAN process_payment calls cannot create a purchase while the transition is paused');
+update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $bankResult = $bankGateway->process_payment($order->get_id());
 wfpms_integration_assert(($bankResult['result'] ?? '') === 'success', 'IBAN gateway finalizes the order and returns a successful checkout result');
 $purchase = WfpMultiSeller\PurchaseRepository::for_order($order->get_id());
@@ -209,6 +214,7 @@ $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'execution_state' => 'pending',
     'updated_at' => current_time('mysql', true),
 ], ['id' => (int) $purchase['id']]);
+delete_option('wfpms_legacy_transition_enabled');
 $rejectSchedule = static fn($pre, $event, $wpError) => false;
 add_filter('pre_schedule_event', $rejectSchedule, 10, 3);
 WfpMultiSeller\PurchaseExecutionService::schedule((int) $purchase['id']);

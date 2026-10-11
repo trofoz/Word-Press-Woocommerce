@@ -2,6 +2,7 @@
 
 use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\ProductRouting;
+use WfpMultiSeller\PaymentOperations;
 use WfpMultiSeller\PurchaseExecutionService;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
@@ -70,12 +71,12 @@ $createAttempt = static function () use ($product, $gateway): array {
     return [$order, $purchase, $attempt];
 };
 
-$sendApproved = static function (array $attempt, string $amount, string $currency, string $authCode = 'AUTH-TEST', ?string $signingSecret = null): array {
+$sendApproved = static function (array $attempt, string $amount, string $currency, string $authCode = 'AUTH-TEST', ?string $signingSecret = null, ?string $merchantAccount = null): array {
     $config = $signingSecret === null ? SellerRepository::config((int) $attempt['config_id']) : null;
     $callbackSecret = $signingSecret ?? ($config === null ? null : SecretStore::decrypt((string) $config['secret_ciphertext']));
     wfpms_callback_integration_assert(is_string($callbackSecret) && $callbackSecret !== '', 'Attempt retains its immutable signing credential version.');
     $fields = [
-        'merchantAccount' => (string) $attempt['merchant_account'],
+        'merchantAccount' => $merchantAccount ?? (string) $attempt['merchant_account'],
         'orderReference' => (string) $attempt['external_reference'],
         'amount' => $amount,
         'currency' => $currency,
@@ -125,9 +126,6 @@ $sendRejected = static function (array $attempt, string $secret, string $mutatio
     ];
     if ($mutation === 'invalid_signature') {
         $fields['merchantSignature'] = str_repeat('0', 32);
-    } elseif ($mutation === 'wrong_merchant') {
-        $fields['merchantAccount'] = 'unrecognized-integration-merchant';
-        $fields['merchantSignature'] = hash_hmac('md5', implode(';', array_values($fields)), $secret);
     } else {
         throw new InvalidArgumentException('Unknown rejected callback mutation.');
     }
@@ -142,9 +140,19 @@ $sendRejected = static function (array $attempt, string $secret, string $mutatio
 };
 
 global $wpdb;
+update_option('wfpms_legacy_transition_enabled', 'no', false);
+$pausedOrder = wc_create_order();
+$pausedOrder->add_product($product, 1);
+$pausedOrder->set_payment_method('wfpms_card');
+$pausedOrder->calculate_totals();
+$pausedOrder->save();
+$pausedResult = $gateway->process_payment((int) $pausedOrder->get_id());
+wfpms_callback_integration_assert(($pausedResult['result'] ?? '') === 'failure'
+    && PurchaseRepository::for_order((int) $pausedOrder->get_id()) === null,
+    'Direct card process_payment calls are rejected before creating a purchase while the transition is paused.');
+update_option('wfpms_legacy_transition_enabled', 'yes', false);
 [$paidOrder, $paidPurchase, $paidAttempt] = $createAttempt();
 $sendRejected($paidAttempt, $secret, 'invalid_signature');
-$sendRejected($paidAttempt, $secret, 'wrong_merchant');
 $untrustedCallbackReceiptCount = (int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
     (int) $paidPurchase['id']
@@ -154,7 +162,41 @@ $untrustedCallbackEventCount = (int) $wpdb->get_var($wpdb->prepare(
     (int) $paidPurchase['id']
 ));
 wfpms_callback_integration_assert($untrustedCallbackReceiptCount === 0 && $untrustedCallbackEventCount === 0
-    && !$paidOrder->is_paid(), 'Invalid signature and unknown merchant callbacks create no financial evidence and do not pay the order.');
+    && !$paidOrder->is_paid(), 'Invalid signature callbacks create no financial evidence and do not pay the order.');
+
+[$mismatchOrder, $mismatchPurchase, $mismatchAttempt] = $createAttempt();
+$sendApproved($mismatchAttempt, (string) $mismatchAttempt['expected_amount'], (string) $mismatchAttempt['currency'],
+    'AUTH-WRONG-MERCHANT', $secret, 'unrecognized-integration-merchant');
+$mismatchPurchase = PurchaseRepository::for_order((int) $mismatchOrder->get_id());
+$mismatchReceipt = $mismatchPurchase === null ? null : $wpdb->get_row($wpdb->prepare(
+    'SELECT classification FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
+    (int) $mismatchPurchase['id']
+), ARRAY_A);
+$mismatchEvent = $mismatchPurchase === null ? null : $wpdb->get_row($wpdb->prepare(
+    'SELECT evidence FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d ORDER BY id DESC LIMIT 1',
+    (int) $mismatchPurchase['id']
+), ARRAY_A);
+$mismatchEvidence = is_array($mismatchEvent) ? json_decode((string) $mismatchEvent['evidence'], true) : null;
+$mismatchOrder = wc_get_order((int) $mismatchOrder->get_id());
+wfpms_callback_integration_assert($mismatchPurchase !== null && (string) $mismatchPurchase['state'] === 'review'
+    && is_array($mismatchReceipt) && (string) $mismatchReceipt['classification'] === 'needs_review'
+    && is_array($mismatchEvidence) && ($mismatchEvidence['merchant_account_received'] ?? '') === 'unrecognized-integration-merchant'
+    && ($mismatchEvidence['merchant_account_matches'] ?? true) === false
+    && $mismatchOrder instanceof WC_Order && !$mismatchOrder->is_paid(),
+    'A correctly signed Approved callback naming a different merchant is durably recorded for review and does not pay the order.');
+wp_set_current_user($adminId);
+ob_start();
+PaymentOperations::render_page();
+$reviewQueueHtml = (string) ob_get_clean();
+wfpms_callback_integration_assert(str_contains($reviewQueueHtml, 'unrecognized-integration-merchant')
+    && str_contains($reviewQueueHtml, 'integration-merchant'),
+    'The operator review queue displays the received and expected merchant accounts for a mismatch.');
+$sendApproved($mismatchAttempt, (string) $mismatchAttempt['expected_amount'], (string) $mismatchAttempt['currency'],
+    'AUTH-WRONG-MERCHANT', $secret, 'unrecognized-integration-merchant');
+wfpms_callback_integration_assert((int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
+    (int) $mismatchPurchase['id']
+)) === 1, 'Retry of a signed wrong-merchant callback does not duplicate its review receipt.');
 $rotatedSecret = 'integration-rotated-only-' . wp_salt('auth');
 SellerRepository::save($sellerId, [
     'internal_label' => 'WayForPay callback integration seller',
@@ -299,4 +341,4 @@ wfpms_callback_integration_assert($wrongCurrencyPurchase !== null
     && (string) $wrongCurrencyReceipt['currency'] === $wrongCurrency
     && $wrongCurrencyOrder instanceof WC_Order && !$wrongCurrencyOrder->is_paid(), 'Approved callback with the wrong currency is recorded for review and does not pay the order.');
 
-echo "PASS: signed callback retries, invalid signatures and merchants, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";
+echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";

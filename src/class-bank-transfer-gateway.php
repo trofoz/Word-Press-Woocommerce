@@ -17,7 +17,26 @@ final class BankTransferGateway extends \WC_Payment_Gateway
         $this->title = __('Переказ на рахунок', 'wayforpay-multi-seller');
         $this->has_fields = false;
         $this->supports = ['products'];
-        $this->enabled = 'yes';
+        $this->init_form_fields();
+        $this->init_settings();
+        $this->title = $this->get_option('title', $this->title);
+    }
+
+    public function init_form_fields(): void
+    {
+        $this->form_fields = [
+            'enabled' => [
+                'title' => __('Увімкнути/вимкнути', 'woocommerce'),
+                'type' => 'checkbox',
+                'label' => __('Увімкнути переказ на рахунок', 'wayforpay-multi-seller'),
+                'default' => 'yes',
+            ],
+            'title' => [
+                'title' => __('Назва способу оплати', 'wayforpay-multi-seller'),
+                'type' => 'text',
+                'default' => __('Переказ на рахунок', 'wayforpay-multi-seller'),
+            ],
+        ];
     }
 
     public static function boot(): void
@@ -29,7 +48,7 @@ final class BankTransferGateway extends \WC_Payment_Gateway
 
     public function is_available(): bool
     {
-        if (!parent::is_available() || !function_exists('WC')) {
+        if (!parent::is_available() || !LegacyMigration::is_transition_enabled() || !function_exists('WC')) {
             return false;
         }
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
@@ -65,6 +84,12 @@ final class BankTransferGateway extends \WC_Payment_Gateway
     {
         $orderId = (int) $orderId;
         try {
+            if ($this->enabled !== 'yes') {
+                throw new \RuntimeException('Bank transfer is disabled in WooCommerce settings.');
+            }
+            if (!LegacyMigration::is_transition_enabled()) {
+                throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
+            }
             $purchase = OrderPurchaseService::finalize($orderId);
             $instructions = self::issue_instructions($orderId, (int) $purchase['id']);
             $order = wc_get_order($orderId);
@@ -137,6 +162,9 @@ final class BankTransferGateway extends \WC_Payment_Gateway
     private static function issue_instructions(int $orderId, int $purchaseId): array
     {
         global $wpdb;
+        if (!LegacyMigration::is_transition_enabled()) {
+            throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
+        }
         if (!PurchaseRepository::order_lock($orderId)) {
             throw new \RuntimeException('Could not lock this order. Please retry.');
         }

@@ -88,7 +88,6 @@ final class LegacyMigration
     {
         if (!self::is_transition_enabled()) {
             unset($gateways['wfpms_card'], $gateways['wfpms_iban']);
-            if (self::owns_callback_route()) unset($gateways['wayforpay']);
             return $gateways;
         }
         unset($gateways['wayforpay']);
@@ -118,7 +117,7 @@ final class LegacyMigration
             'imported' => __('Параметри мерчанта імпортовано в конфігурацію продавця. Старі налаштування збережено.', 'wayforpay-multi-seller'),
             'already_imported' => __('Ці самі параметри вже імпортовано до цього продавця.', 'wayforpay-multi-seller'),
             'order_migrated' => __('Замовлення прив’язано до продавця та зафіксовано фінансовий знімок.', 'wayforpay-multi-seller'),
-            'callback_owned' => __('Форк приймає старі callback лише для явно мігрованих замовлень. Нові оплати залишаються призупиненими.', 'wayforpay-multi-seller'),
+            'callback_owned' => __('Форк обробляє callback мігрованих замовлень, а інші передає оригінальному шлюзу. Чинний checkout працює до завершення переходу.', 'wayforpay-multi-seller'),
             'transition_enabled' => __('Нові платежі форку увімкнено; старий шлюз WayForPay прибирається з checkout.', 'wayforpay-multi-seller'),
             'settings_missing' => __('Не знайдено повні налаштування оригінального шлюзу (merchant_account, secret_key).', 'wayforpay-multi-seller'),
             'seller_required' => __('Оберіть продавця з перевіреною юридичною особою та реквізитами.', 'wayforpay-multi-seller'),
@@ -150,8 +149,8 @@ final class LegacyMigration
         $transitionLabel = self::is_transition_enabled()
             ? __('Форк активний для нових оплат', 'wayforpay-multi-seller')
             : (self::owns_callback_route()
-                ? __('Callback старого шлюзу у форку; нові оплати призупинені', 'wayforpay-multi-seller')
-                : __('Старий шлюз ще обробляє callback; нові оплати форку призупинені', 'wayforpay-multi-seller'));
+                ? __('Перехід підготовлено: чинний шлюз і checkout збережені до фінального перемикання', 'wayforpay-multi-seller')
+                : __('Режим налаштування: чинний шлюз і checkout збережені', 'wayforpay-multi-seller'));
         echo '<tr><th>' . esc_html__('Стан переходу', 'wayforpay-multi-seller') . '</th><td>'
             . esc_html($transitionLabel) . '</td></tr></tbody></table>';
 
@@ -177,21 +176,21 @@ final class LegacyMigration
         self::render_legacy_orders($settings);
         echo '<hr><h2>' . esc_html__('Перехід callback та нових оплат', 'wayforpay-multi-seller') . '</h2>';
         if (!self::owns_callback_route()) {
-            echo '<p>' . esc_html__('Після цього кроку старий handler припинить обробляти callback. Форк відхилятиме callback для ще не прив’язаних замовлень; нові оплати форку залишаться вимкненими, доки ви не завершите міграцію.', 'wayforpay-multi-seller') . '</p>';
+            echo '<p>' . esc_html__('На етапі підготовки форк прийматиме callback лише для явно мігрованих замовлень, а callback інших замовлень передаватиме оригінальному плагіну. Чинний checkout залишиться доступним; нові шлюзи форку з’являться після фінального перемикання.', 'wayforpay-multi-seller') . '</p>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_claim_legacy_callback">';
             wp_nonce_field('wfpms_claim_legacy_callback');
-            echo '<p><label><input type="checkbox" name="confirm_callback_owner" value="1" required> ' . esc_html__('Підтверджую, що переглянув відкриті старі замовлення і готовий відхиляти callback для неперенесених замовлень.', 'wayforpay-multi-seller') . '</label></p>';
-            submit_button(__('Передати callback форку та призупинити нові оплати', 'wayforpay-multi-seller'));
+            echo '<p><label><input type="checkbox" name="confirm_callback_owner" value="1" required> ' . esc_html__('Підтверджую, що переглянув відкриті старі замовлення та готовий передати обробку їхніх callback форку.', 'wayforpay-multi-seller') . '</label></p>';
+            submit_button(__('Підготувати обробку callback форком', 'wayforpay-multi-seller'));
             echo '</form>';
         } elseif (!self::is_transition_enabled()) {
-            echo '<p>' . esc_html__('Callback старого шлюзу вже належить форку. Прив’яжіть потрібні відкриті замовлення вище, потім увімкніть нові оплати.', 'wayforpay-multi-seller') . '</p>';
+            echo '<p>' . esc_html__('Чинний шлюз продовжує обробляти замовлення без міграційного запису; callback мігрованих замовлень приймає форк. Прив’яжіть потрібні відкриті замовлення, перевірте профілі й лише тоді завершіть перемикання.', 'wayforpay-multi-seller') . '</p>';
             echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="wfpms_enable_legacy_transition">';
             wp_nonce_field('wfpms_enable_legacy_transition');
             echo '<p><label><input type="checkbox" name="confirm_transition" value="1" required> ' . esc_html__('Підтверджую завершення перевірки конфліктів і старих замовлень.', 'wayforpay-multi-seller') . '</label></p>';
             submit_button(__('Увімкнути оплати форку', 'wayforpay-multi-seller'));
             echo '</form>';
         } else {
-            echo '<p>' . esc_html__('Перехід увімкнений. Старий gateway ID wayforpay приховується; його callback обробляє лише адаптер форку для явно мігрованих замовлень.', 'wayforpay-multi-seller') . '</p>';
+            echo '<p>' . esc_html__('Перехід завершений. Оригінальний шлюз прихований; його callback обробляє адаптер форку лише для явно мігрованих замовлень.', 'wayforpay-multi-seller') . '</p>';
         }
         echo '</div>';
     }
@@ -359,8 +358,8 @@ final class LegacyMigration
             || self::is_transition_enabled()) return;
         $url = add_query_arg('page', 'wfpms-legacy-migration', admin_url('admin.php'));
         $message = self::owns_callback_route()
-            ? __('Перехід callback розпочато: нові платежі призупинені до завершення прив’язки відкритих замовлень.', 'wayforpay-multi-seller')
-            : __('Знайдено налаштування оригінального WayForPay. Нові способи форку призупинені до явного переходу.', 'wayforpay-multi-seller');
+            ? __('Перехід готується: чинний checkout працює, а нові способи форку ще вимкнені до фінального перемикання.', 'wayforpay-multi-seller')
+            : __('Знайдено налаштування оригінального WayForPay. Чинний checkout працює, поки ви налаштовуєте продавців і товари.', 'wayforpay-multi-seller');
         echo '<div class="notice notice-warning"><p>'
             . esc_html($message)
             . ' <a href="' . esc_url($url) . '">' . esc_html__('Відкрити міграцію', 'wayforpay-multi-seller') . '</a></p></div>';
@@ -404,11 +403,21 @@ final class LegacyMigration
         }
         $reference = (string) $data['orderReference'];
         if (preg_match('/\A([1-9][0-9]*)_woo_w4p_([1-9][0-9]*)\z/', $reference, $matches) !== 1) {
-            status_header(400);
-            exit;
+            if (self::is_transition_enabled()) {
+                status_header(400);
+                exit;
+            }
+            return;
         }
         $orderId = (int) $matches[1];
         $mapping = self::for_order($orderId);
+        if ($mapping === null) {
+            if (self::is_transition_enabled()) {
+                status_header(400);
+                exit;
+            }
+            return;
+        }
         $purchase = $mapping === null ? null : PurchaseRepository::for_order($orderId);
         $order = $mapping === null ? false : wc_get_order($orderId);
         $config = $mapping === null ? null : SellerRepository::config((int) $mapping['config_id']);

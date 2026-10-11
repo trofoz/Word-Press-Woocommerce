@@ -478,6 +478,16 @@ final class PaymentOperations
                     $reference === '' ? '' : ' · ref ' . $reference
                 );
             }
+            foreach (PurchaseRepository::events_for_purchase((int) $purchase['id']) as $event) {
+                $evidence = json_decode((string) $event['evidence'], true);
+                if (is_array($evidence) && ($evidence['merchant_account_matches'] ?? true) === false) {
+                    $details[] = sprintf(
+                        __('Merchant mismatch: received %1$s; expected %2$s', 'wayforpay-multi-seller'),
+                        (string) ($evidence['merchant_account_received'] ?? '—'),
+                        (string) ($evidence['merchant_account_expected'] ?? '—')
+                    );
+                }
+            }
             $orderUrl = $order instanceof \WC_Order ? $order->get_edit_order_url() : '';
             echo '<tr><td>' . ($orderUrl !== '' ? '<a href="' . esc_url($orderUrl) . '">#' . esc_html((string) $purchase['order_id']) . '</a>' : '#' . esc_html((string) $purchase['order_id']))
                 . '</td><td>' . esc_html((string) $purchase['internal_label']) . '</td><td>' . esc_html((string) $purchase['state'])

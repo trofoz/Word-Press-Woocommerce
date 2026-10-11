@@ -19,7 +19,9 @@ final class WayForPayGateway extends \WC_Payment_Gateway
         $this->has_fields = false;
         $this->supports = ['products'];
         $this->title = __('Оплата карткою', 'wayforpay-multi-seller');
-        $this->enabled = 'yes';
+        $this->init_form_fields();
+        $this->init_settings();
+        $this->title = $this->get_option('title', $this->title);
     }
 
     public static function boot(): void
@@ -36,9 +38,26 @@ final class WayForPayGateway extends \WC_Payment_Gateway
         return $gateways;
     }
 
+    public function init_form_fields(): void
+    {
+        $this->form_fields = [
+            'enabled' => [
+                'title' => __('Увімкнути/вимкнути', 'woocommerce'),
+                'type' => 'checkbox',
+                'label' => __('Увімкнути оплату карткою WayForPay', 'wayforpay-multi-seller'),
+                'default' => 'yes',
+            ],
+            'title' => [
+                'title' => __('Назва способу оплати', 'wayforpay-multi-seller'),
+                'type' => 'text',
+                'default' => __('Оплата карткою', 'wayforpay-multi-seller'),
+            ],
+        ];
+    }
+
     public function is_available(): bool
     {
-        if (!parent::is_available() || !function_exists('WC')) {
+        if (!parent::is_available() || !LegacyMigration::is_transition_enabled() || !function_exists('WC')) {
             return false;
         }
 
@@ -87,6 +106,12 @@ final class WayForPayGateway extends \WC_Payment_Gateway
     {
         $orderId = (int) $orderId;
         try {
+            if ($this->enabled !== 'yes') {
+                throw new \RuntimeException('Card payment is disabled in WooCommerce settings.');
+            }
+            if (!LegacyMigration::is_transition_enabled()) {
+                throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
+            }
             $purchase = OrderPurchaseService::finalize($orderId);
             $attempt = self::begin_attempt($orderId, $purchase);
             $token = hash_hmac('sha256', $orderId . ':' . $attempt['external_reference'], wp_salt('auth'));
@@ -107,6 +132,9 @@ final class WayForPayGateway extends \WC_Payment_Gateway
     private static function begin_attempt(int $orderId, array $purchase): array
     {
         global $wpdb;
+        if (!LegacyMigration::is_transition_enabled()) {
+            throw new \RuntimeException('New fork payments are paused until the WayForPay transition is enabled.');
+        }
         if (!PurchaseRepository::order_lock($orderId)) {
             throw new \RuntimeException('Could not lock this order. Please retry.');
         }
@@ -328,12 +356,12 @@ final class WayForPayGateway extends \WC_Payment_Gateway
         $config = $attempt ? SellerRepository::config((int) $attempt['config_id']) : null;
         $secret = $config ? SecretStore::decrypt((string) $config['secret_ciphertext']) : null;
         if ($attempt === null || $config === null || $secret === null
-            || !hash_equals((string) $attempt['merchant_account'], (string) $data['merchantAccount'])
-            || !hash_equals((string) $config['merchant_account'], (string) $data['merchantAccount'])
             || !self::valid_callback_signature($data, $secret)) {
             status_header(400);
             exit;
         }
+        $merchantMatches = hash_equals((string) $attempt['merchant_account'], (string) $data['merchantAccount'])
+            && hash_equals((string) $config['merchant_account'], (string) $data['merchantAccount']);
 
         $orderId = (int) $attempt['order_id'];
         if (!PurchaseRepository::order_lock($orderId)) {
@@ -387,7 +415,7 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                             'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
                             (int) $purchase['id']
                         ));
-                        $classification = (!$amountMatch || !$currencyMatch || $closedOrder || !$deadlineOpen || !$snapshotMatches || $prior > 0)
+                        $classification = (!$merchantMatches || !$amountMatch || !$currencyMatch || $closedOrder || !$deadlineOpen || !$snapshotMatches || $prior > 0)
                             ? 'needs_review' : 'accepted';
                         $receiptId = PurchaseRepository::insert_receipt([
                             'purchase_id' => (int) $purchase['id'],
@@ -444,6 +472,9 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                         'amount_received' => substr((string) $data['amount'], 0, 64),
                         'currency' => substr($currency, 0, 3),
                         'reason_code' => substr((string) $data['reasonCode'], 0, 64),
+                        'merchant_account_received' => substr((string) $data['merchantAccount'], 0, 191),
+                        'merchant_account_expected' => substr((string) $attempt['merchant_account'], 0, 191),
+                        'merchant_account_matches' => $merchantMatches,
                         'classification' => $classification,
                     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                     if (!is_string($evidence) || $wpdb->insert(PurchaseRepository::events_table(), [

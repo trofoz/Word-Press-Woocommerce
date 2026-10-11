@@ -106,6 +106,8 @@ jobs:
           curl --fail --silent http://127.0.0.1:8099/ >/dev/null || { cat "$RUNNER_TEMP/wp-server.log"; exit 1; }
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' WFPMS_CHECKOUT='${{ matrix.checkout }}' \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-runtime.php" --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-gateway-settings.php" --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-untrusted-payment-complete.php" --path="$WP_PATH"
           WFPMS_BASE_URL=http://127.0.0.1:8099 \
           WFPMS_PRODUCT_SELLER_ONE="$(wp option get wfpms_integration_iban_product_id --path="$WP_PATH")" \
           WFPMS_PRODUCT_SELLER_ONE_SECOND="$(wp option get wfpms_integration_same_seller_product_2_id --path="$WP_PATH")" \

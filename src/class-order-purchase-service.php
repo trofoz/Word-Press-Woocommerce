@@ -22,7 +22,7 @@ final class OrderPurchaseService
 
     public static function finalize_checkout_order($order): void
     {
-        if ($order instanceof \WC_Order) {
+        if ($order instanceof \WC_Order && LegacyMigration::is_transition_enabled()) {
             self::finalize((int) $order->get_id());
         }
     }
@@ -91,6 +91,11 @@ final class OrderPurchaseService
 
     public static function filter_cart_gateways(array $gateways): array
     {
+        // Keep the current checkout intact until the operator completes the explicit cutover.
+        if (!LegacyMigration::is_transition_enabled()
+            && (!function_exists('is_wc_endpoint_url') || !is_wc_endpoint_url('order-pay'))) {
+            return $gateways;
+        }
         $external = self::allowed_external_gateways($gateways);
         if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-pay')) {
             $orderId = absint(get_query_var('order-pay'));

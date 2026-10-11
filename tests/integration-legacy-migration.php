@@ -49,6 +49,7 @@ wfpms_legacy_assert($wpdb->insert(SellerRepository::configs_table(), [
 $configId = (int) $wpdb->insert_id;
 $wpdb->update(SellerRepository::sellers_table(), ['current_config_id' => $configId], ['id' => $sellerId]);
 update_option('woocommerce_wayforpay_settings', [
+    'enabled' => 'yes',
     'merchant_account' => $merchant,
     'secret_key' => $secret,
 ], false);
@@ -56,6 +57,25 @@ update_option('wfpms_legacy_import', [
     'seller_id' => $sellerId,
     'config_id' => $configId,
 ], false);
+delete_option('wfpms_legacy_callback_owner');
+delete_option('wfpms_legacy_transition_enabled');
+$productId = (int) get_option('wfpms_integration_manual_product_id', 0);
+$product = $productId > 0 ? wc_get_product($productId) : false;
+wfpms_legacy_assert($product instanceof WC_Product, 'setup-mode product fixture exists');
+$initialGateways = WC()->payment_gateways()->payment_gateways();
+$setupGateways = LegacyMigration::filter_gateways(OrderPurchaseService::filter_cart_gateways($initialGateways));
+wfpms_legacy_assert(isset($setupGateways['wayforpay']) && !isset($setupGateways['wfpms_card'])
+    && !isset($setupGateways['wfpms_iban']), 'setup mode preserves the original checkout gateway and keeps fork methods paused');
+$setupOrder = wc_create_order();
+$setupOrder->set_status('pending');
+$setupOrder->set_payment_method('wayforpay');
+$setupOrder->add_product($product, 1);
+$setupOrder->calculate_totals();
+$setupOrder->save();
+OrderPurchaseService::finalize_checkout_order($setupOrder);
+wfpms_legacy_assert(PurchaseRepository::for_order((int) $setupOrder->get_id()) === null,
+    'setup-mode checkout does not create a managed purchase that would block the original gateway callback');
+
 update_option('wfpms_legacy_callback_owner', 'yes', false);
 delete_option('wfpms_legacy_transition_enabled');
 wfpms_legacy_assert(has_action('woocommerce_api_wc_wayforpay', [LegacyMigration::class, 'handle_callback']) === 0,
@@ -66,10 +86,6 @@ wfpms_legacy_assert($upstreamGateway instanceof WC_Payment_Gateway && get_class(
     'the original WayForPay plugin loads beside the fork');
 wfpms_legacy_assert(has_action('woocommerce_api_wc_wayforpay', [$upstreamGateway, 'check_wayforpay_response']) === 10,
     'the fork callback is ordered before the original gateway callback');
-
-$productId = (int) get_option('wfpms_integration_manual_product_id', 0);
-$product = $productId > 0 ? wc_get_product($productId) : null;
-wfpms_legacy_assert($product instanceof WC_Product, 'legacy migration product fixture exists');
 
 $legacyOrder = wc_create_order();
 $legacyOrder->set_status('pending');
@@ -126,10 +142,40 @@ wfpms_legacy_assert($rejected((int) $otherGatewayOrder->get_id()), 'an order fro
 
 $gateways = ['wayforpay' => new stdClass(), 'wfpms_card' => new stdClass(), 'wfpms_iban' => new stdClass()];
 $pausedGateways = LegacyMigration::filter_gateways($gateways);
-wfpms_legacy_assert($pausedGateways === [], 'claiming the old callback route keeps all checkout gateways paused');
+wfpms_legacy_assert(array_keys($pausedGateways) === ['wayforpay'], 'claiming callback ownership keeps the original checkout active while pausing fork methods');
+$upstreamGateway = $registeredGateways['wayforpay'] ?? null;
+wfpms_legacy_assert(is_object($upstreamGateway) && method_exists($upstreamGateway, 'getResponseSignature'),
+    'original gateway exposes its response signature helper for the callback handoff fixture');
+$callback = [
+    'merchantAccount' => $merchant,
+    'orderReference' => (string) $setupOrder->get_id() . '_woo_w4p_1',
+    'amount' => (string) $setupOrder->get_total(),
+    'currency' => (string) $setupOrder->get_currency(),
+    'authCode' => 'AUTH-SETUP-HANDOFF',
+    'cardPan' => '411111******1111',
+    'transactionStatus' => 'Approved',
+    'reasonCode' => '1100',
+];
+$callback['merchantSignature'] = $upstreamGateway->getResponseSignature($callback);
+$callbackResponse = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
+    'timeout' => 10,
+    'headers' => ['Content-Type' => 'application/json'],
+    'body' => wp_json_encode($callback),
+]);
+$setupOrder = wc_get_order((int) $setupOrder->get_id());
+wfpms_legacy_assert(!is_wp_error($callbackResponse) && wp_remote_retrieve_response_code($callbackResponse) === 200
+    && $setupOrder instanceof WC_Order && $setupOrder->is_paid(),
+    'unmapped legacy callbacks pass through to the original gateway while the cutover is staged');
 update_option('wfpms_legacy_transition_enabled', 'yes', false);
 $activeGateways = LegacyMigration::filter_gateways($gateways);
 wfpms_legacy_assert(!isset($activeGateways['wayforpay']) && isset($activeGateways['wfpms_card']) && isset($activeGateways['wfpms_iban']),
     'enabling the transition hides upstream WayForPay and exposes fork gateways');
+$postCutoverCallback = wp_remote_post(home_url('/?wc-api=WC_wayforpay'), [
+    'timeout' => 10,
+    'headers' => ['Content-Type' => 'application/json'],
+    'body' => wp_json_encode($callback),
+]);
+wfpms_legacy_assert(!is_wp_error($postCutoverCallback) && wp_remote_retrieve_response_code($postCutoverCallback) === 400,
+    'after cutover, an un-migrated legacy callback is rejected instead of falling through to the original handler');
 
 echo "PASS: legacy order migration, invalid-order rejection, and callback/gateway ownership transition\n";

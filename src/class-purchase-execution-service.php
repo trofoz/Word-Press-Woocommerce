@@ -6,12 +6,40 @@ namespace WfpMultiSeller;
 /** Runs WooCommerce's native payment completion once, after durable acceptance. */
 final class PurchaseExecutionService
 {
+    /** @var array<int,int> Orders authorized for the current in-process completion call. */
+    private static array $authorizedPaymentCompletions = [];
+
     public static function boot(): void
     {
         add_action('init', [self::class, 'ensure_schedule']);
         add_action('wfpms_process_execution', [self::class, 'run'], 10, 1);
         add_action('wfpms_expire_purchases', [self::class, 'expire_due']);
         add_action('woocommerce_payment_complete', [self::class, 'observe_woo_payment_complete'], 10, 1);
+        add_filter('woocommerce_valid_order_statuses_for_payment_complete', [self::class, 'filter_payment_complete_statuses'], PHP_INT_MAX, 2);
+    }
+
+    /** Prevent other plugins from completing a managed order without a durable paid/free decision. */
+    public static function filter_payment_complete_statuses(array $statuses, $order): array
+    {
+        if (!$order instanceof \WC_Order) {
+            return $statuses;
+        }
+        $orderId = (int) $order->get_id();
+        $purchase = PurchaseRepository::for_order($orderId);
+        if ($purchase === null) {
+            return $statuses;
+        }
+        if ((string) $purchase['state'] === 'free'
+            && in_array((string) $purchase['execution_state'], ['pending', 'running'], true)) {
+            return $statuses;
+        }
+        if (!isset(self::$authorizedPaymentCompletions[$orderId])
+            || (string) $purchase['state'] !== 'paid'
+            || (string) $purchase['execution_state'] !== 'running'
+            || self::$authorizedPaymentCompletions[$orderId] !== (int) $purchase['id']) {
+            return [];
+        }
+        return $statuses;
     }
 
     public static function schedule(int $purchaseId): void
@@ -111,10 +139,13 @@ final class PurchaseExecutionService
             }
 
             try {
+                self::$authorizedPaymentCompletions[$orderId] = $purchaseId;
                 $order->payment_complete();
             } catch (\Throwable $error) {
                 self::finish_execution($purchaseId, $token, 'review', 'payment_complete_exception');
                 return;
+            } finally {
+                unset(self::$authorizedPaymentCompletions[$orderId]);
             }
             $freshOrder = wc_get_order($orderId);
             if ($freshOrder instanceof \WC_Order && $freshOrder->is_paid()) {
