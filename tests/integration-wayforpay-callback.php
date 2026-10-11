@@ -57,11 +57,13 @@ update_post_meta((int) $product->get_id(), ProductRouting::META_SELLER_ID, $sell
 $gateway = WC()->payment_gateways()->payment_gateways()['wfpms_card'] ?? null;
 wfpms_callback_integration_assert($gateway instanceof WayForPayGateway, 'WayForPay card gateway is registered.');
 
-$createAttempt = static function (?WC_Product $purchaseProduct = null) use ($product, $gateway): array {
+$createAttempt = static function (array $purchaseProducts = []) use ($product, $gateway): array {
     global $wpdb;
     $order = wc_create_order();
     $order->set_billing_email('callback-integration@example.test');
-    $order->add_product($purchaseProduct ?? $product, 1);
+    foreach ($purchaseProducts ?: [$product] as $purchaseProduct) {
+        $order->add_product($purchaseProduct, 1);
+    }
     $order->set_payment_method('wfpms_card');
     $order->calculate_totals();
     $order->save();
@@ -272,6 +274,8 @@ add_action('woocommerce_payment_complete', static function (int $orderId) use ($
         $paymentCompletions++;
     }
 });
+wfpms_callback_integration_assert($paidOrder->needs_processing(),
+    'Before authorized execution, a virtual non-downloadable service follows native needs_processing, including its cache.');
 PurchaseExecutionService::run((int) $paidPurchase['id']);
 wp_clear_scheduled_hook('wfpms_process_execution', $executionArgs);
 $paidOrder = wc_get_order($paidOrderId);
@@ -279,8 +283,8 @@ $paidPurchase = PurchaseRepository::for_order($paidOrderId);
 $paidOrderStatus = $paidOrder instanceof WC_Order ? $paidOrder->get_status() : 'missing';
 $paidExecutionState = (string) ($paidPurchase['execution_state'] ?? 'missing');
 $paidExecutionError = (string) ($paidPurchase['execution_error_code'] ?? '');
-wfpms_callback_integration_assert($paidOrder instanceof WC_Order && $paidOrder->get_status() === 'processing'
-    && $completedTransitions === 0 && $paymentCompletions === 1
+wfpms_callback_integration_assert($paidOrder instanceof WC_Order && $paidOrder->get_status() === 'completed'
+    && $completedTransitions === 1 && $paymentCompletions === 1
     && $paidPurchase !== null && $paidExecutionState === 'done', 'Accepted payment completion state: order=' . $paidOrderStatus
     . ', execution=' . $paidExecutionState . ', error=' . $paidExecutionError . '.');
 $executionCount = (int) $wpdb->get_var($wpdb->prepare(
@@ -326,15 +330,15 @@ $sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields
 PurchaseExecutionService::run((int) $paidPurchase['id']);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null && (string) $paidPurchase['execution_state'] === 'done'
-    && wc_get_order($paidOrderId)->get_status() === 'processing'
-    && $completedTransitions === 0 && $paymentCompletions === 1
+    && wc_get_order($paidOrderId)->get_status() === 'completed'
+    && $completedTransitions === 1 && $paymentCompletions === 1
     && (int) $wpdb->get_var($wpdb->prepare(
         'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
         (int) $paidPurchase['id'], 'execution_done'
     )) === 1, 'Repeated callback after fulfillment does not execute payment completion again.');
 
-echo "BASELINE: accepted card virtual non-downloadable service remains processing; completed transitions=0.\n";
-[$physicalOrder, $physicalPurchase, $physicalAttempt] = $createAttempt($physicalProduct);
+echo "PASS: accepted card virtual service becomes completed once; duplicate callback does not repeat completion.\n";
+[$physicalOrder, $physicalPurchase, $physicalAttempt] = $createAttempt([$physicalProduct]);
 $physicalOrderId = (int) $physicalOrder->get_id();
 $physicalCompletions = 0;
 add_action('woocommerce_order_status_completed', static function (int $id) use ($physicalOrderId, &$physicalCompletions): void {
@@ -347,6 +351,20 @@ PurchaseExecutionService::run((int) $physicalPurchase['id']);
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $physicalPurchase['id']]);
 wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'processing'
     && $physicalCompletions === 0, 'Accepted physical purchase retains native processing and does not fire completed.');
+[$mixedOrder, $mixedPurchase, $mixedAttempt] = $createAttempt([$product, $physicalProduct]);
+$sendApproved($mixedAttempt, (string) $mixedAttempt['expected_amount'], (string) $mixedAttempt['currency']);
+PurchaseExecutionService::run((int) $mixedPurchase['id']);
+wp_clear_scheduled_hook('wfpms_process_execution', [(int) $mixedPurchase['id']]);
+wfpms_callback_integration_assert(wc_get_order((int) $mixedOrder->get_id())->get_status() === 'processing',
+    'Mixed virtual and physical purchases retain native processing.');
+$unmanagedOrder = wc_create_order();
+$unmanagedOrder->add_product($product, 1);
+$unmanagedOrder->calculate_totals();
+$unmanagedOrder->save();
+$unmanagedOrder->payment_complete();
+wfpms_callback_integration_assert(wc_get_order((int) $unmanagedOrder->get_id())->get_status() === 'processing',
+    'Unmanaged virtual services retain native WooCommerce completion policy.');
+echo "PASS: physical, mixed, and unmanaged virtual purchases retain native processing.\n";
 
 [$wrongAmountOrder, $wrongAmountPurchase, $wrongAmountAttempt] = $createAttempt();
 $wrongAmountOrderId = (int) $wrongAmountOrder->get_id();
@@ -374,6 +392,7 @@ wfpms_callback_integration_assert($wrongAmountPurchase !== null
     && $wrongAmountOrder instanceof WC_Order && !$wrongAmountOrder->is_paid()
     && wc_get_order($wrongAmountOrderId)->get_status() !== 'completed'
     && $exceptionCompletions === 0, 'Financial exception does not complete the educational purchase or emit completed.');
+echo "PASS: financial callback exception does not complete an educational purchase.\n";
 $sendApproved($wrongAmountAttempt, $wrongAmount, (string) $wrongAmountAttempt['currency']);
 wfpms_callback_integration_assert((int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',

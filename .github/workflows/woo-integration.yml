@@ -139,7 +139,7 @@ jobs:
           WFPMS_PRODUCT_SELLER_ONE="$(wp option get wfpms_integration_iban_product_id --path="$WP_PATH")" \
             python3 "$GITHUB_WORKSPACE/tests/integration-http-admin.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-wayforpay-callback.php" --path="$WP_PATH"
-          for receipt_case in accepted duplicate conflict; do
+          for receipt_case in accepted duplicate conflict review physical; do
             WFPMS_BANK_RECEIPT_CASE="$receipt_case" \
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-bank-receipt.php" --path="$WP_PATH"
           done
