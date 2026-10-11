@@ -147,6 +147,12 @@ jobs:
             WFPMS_REFUND_CASE="$refund_case" \
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-record.php" --path="$WP_PATH"
           done
+          refund_execution_status=0
+          for execution_case in card iban_no_attempt paid_review extra_receipt recovery; do
+            WFPMS_REFUND_EXECUTION_CASE="$execution_case" \
+              wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-execution.php" --path="$WP_PATH" || refund_execution_status=1
+          done
+          [[ "$refund_execution_status" == 0 ]] || { echo 'Refund/execution regressions failed'; exit 1; }
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-schema-upgrade.php" --path="$WP_PATH"
           WFPMS_BASE_URL=http://127.0.0.1:8099 \
