@@ -386,13 +386,12 @@ $distinctAttemptReceipts = $wpdb->get_results($wpdb->prepare(
 ), ARRAY_A);
 $distinctAttemptsExecutionArgs = [(int) $distinctAttemptsPurchase['id']];
 $executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $distinctAttemptsExecutionArgs);
-wfpms_callback_integration_assert($executionWasScheduled,
-    'The first accepted callback schedules one-time purchase execution.');
-if ($executionWasScheduled) {
-    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
-}
-wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
+$executionWasAlreadyCompleted = $distinctAttemptsPurchase !== null
+    && (string) $distinctAttemptsPurchase['execution_state'] === 'done';
+wfpms_callback_integration_assert($executionWasScheduled || $executionWasAlreadyCompleted,
+    'The accepted callback queued execution or the scheduled runner already completed it.');
+wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
 wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
     && (string) $distinctAttemptReceipts[0]['provider_reference'] === (string) $firstDistinctAttempt['external_reference']
     && (string) $distinctAttemptReceipts[1]['provider_reference'] === (string) $secondDistinctAttempt['external_reference']
@@ -400,10 +399,9 @@ wfpms_callback_integration_assert(is_array($distinctAttemptReceipts) && count($d
     && (string) $distinctAttemptReceipts[1]['classification'] === 'needs_review'
     && $distinctAttemptsPurchase !== null && (int) $distinctAttemptsPurchase['accepted_receipt_id'] === (int) $distinctAttemptReceipts[0]['id'],
     'Two distinct signed Approved attempts retain both receipts, accepting only the first.');
-if ($executionWasScheduled) {
-    // A retried/delivered-twice queue action must not complete the order twice.
-    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
-}
+// The scheduled runner may have fired already; duplicate delivery must stay harmless either way.
+do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
+do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
 $distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
 $distinctAttemptsOrder = wc_get_order((int) $distinctAttemptsOrder->get_id());
 wfpms_callback_integration_assert($distinctAttemptsPurchase !== null
