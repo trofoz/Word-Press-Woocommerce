@@ -230,10 +230,25 @@ $numericReferenceOrderId = (int) $numericReferenceOrder->get_id();
 wp_cache_delete($numericReferenceOrderId, 'orders');
 clean_post_cache($numericReferenceOrderId);
 $numericReferenceOrder = wc_get_order($numericReferenceOrderId);
+$numericReferencePurchase = PurchaseRepository::for_order($numericReferenceOrderId);
+$numericReferenceAttempts = $numericReferencePurchase === null ? []
+    : PurchaseRepository::attempts_for_purchase((int) $numericReferencePurchase['id']);
+$numericReferenceAttemptStored = false;
+foreach ($numericReferenceAttempts as $attempt) {
+    if ((string) $attempt['external_reference'] === (string) $numericReferenceOrderId) {
+        $numericReferenceAttemptStored = true;
+        break;
+    }
+}
+$numericResponseStatus = is_wp_error($numericReferenceResponse) ? 'WP_Error'
+    : (string) wp_remote_retrieve_response_code($numericReferenceResponse);
 wfpms_legacy_assert(!is_wp_error($numericReferenceResponse)
     && wp_remote_retrieve_response_code($numericReferenceResponse) === 200
-    && $numericReferenceOrder instanceof WC_Order && $numericReferenceOrder->is_paid(),
-    'an explicitly migrated order accepts a valid callback with a numeric legacy orderReference');
+    && $numericReferenceOrder instanceof WC_Order && !$numericReferenceOrder->is_paid()
+    && $numericReferencePurchase !== null && (string) $numericReferencePurchase['state'] === 'review'
+    && $numericReferenceAttemptStored,
+    'an explicitly migrated order records numeric legacy orderReference evidence for manual review; HTTP '
+    . $numericResponseStatus . ', purchase state ' . (is_array($numericReferencePurchase) ? (string) $numericReferencePurchase['state'] : 'missing'));
 
 update_option('wfpms_sales_paused', 'yes', false);
 $pauseFiltered = OrderPurchaseService::filter_cart_gateways($gateways);
