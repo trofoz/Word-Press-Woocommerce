@@ -44,12 +44,19 @@ try {
         if (!str_contains($rendered[$fixtureName], 'Integration Seller 1')
             || !str_contains($rendered[$fixtureName], 'payment_method_wfpms_iban')
             || str_contains($rendered[$fixtureName], 'payment_method_wfpms_card')) {
+            $visibleText = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($rendered[$fixtureName])));
             throw new RuntimeException(
                 "Direct order-pay shortcode output is incorrect for {$fixtureName}; "
                 . 'bytes=' . strlen($rendered[$fixtureName])
                 . '; seller=' . (str_contains($rendered[$fixtureName], 'Integration Seller 1') ? 'yes' : 'no')
                 . '; iban=' . (str_contains($rendered[$fixtureName], 'payment_method_wfpms_iban') ? 'yes' : 'no')
                 . '; card=' . (str_contains($rendered[$fixtureName], 'payment_method_wfpms_card') ? 'yes' : 'no')
+                . '; order_status=' . $order->get_status()
+                . '; needs_payment=' . ($order->needs_payment() ? 'yes' : 'no')
+                . '; current_user=' . get_current_user_id()
+                . '; order_customer=' . $order->get_customer_id()
+                . '; can_pay=' . (current_user_can('pay_for_order', $orderId) ? 'yes' : 'no')
+                . '; visible_text=' . substr($visibleText, 0, 400)
             );
         }
     }
