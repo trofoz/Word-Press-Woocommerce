@@ -341,16 +341,27 @@ echo "PASS: accepted card virtual service becomes completed once; duplicate call
 [$physicalOrder, $physicalPurchase, $physicalAttempt] = $createAttempt([$physicalProduct]);
 $physicalOrderId = (int) $physicalOrder->get_id();
 $physicalCompletions = 0;
+$physicalPaymentCompletions = 0;
 add_action('woocommerce_order_status_completed', static function (int $id) use ($physicalOrderId, &$physicalCompletions): void {
     if ($id === $physicalOrderId) {
         $physicalCompletions++;
     }
 });
+add_action('woocommerce_payment_complete', static function (int $id) use ($physicalOrderId, &$physicalPaymentCompletions): void {
+    if ($id === $physicalOrderId) { $physicalPaymentCompletions++; }
+});
+wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'pending',
+    'Selecting card for a physical purchase leaves it pending before payment confirmation.');
+$sendApproved($physicalAttempt, (string) $physicalAttempt['expected_amount'], (string) $physicalAttempt['currency']);
+PurchaseExecutionService::run((int) $physicalPurchase['id']);
+PurchaseExecutionService::run((int) $physicalPurchase['id']);
 $sendApproved($physicalAttempt, (string) $physicalAttempt['expected_amount'], (string) $physicalAttempt['currency']);
 PurchaseExecutionService::run((int) $physicalPurchase['id']);
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $physicalPurchase['id']]);
-wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'processing'
-    && $physicalCompletions === 0, 'Accepted physical purchase retains native processing and does not fire completed.');
+wfpms_callback_integration_assert(wc_get_order($physicalOrderId)->get_status() === 'completed'
+    && $physicalCompletions === 1 && $physicalPaymentCompletions === 1,
+    'Confirmed physical card purchase reaches completed once; duplicate callback and runner do not repeat completion.');
+echo "PASS: confirmed physical card purchase completed once; duplicate callback and runner are harmless.\n";
 [$mixedOrder, $mixedPurchase, $mixedAttempt] = $createAttempt([$product, $physicalProduct]);
 $sendApproved($mixedAttempt, (string) $mixedAttempt['expected_amount'], (string) $mixedAttempt['currency']);
 PurchaseExecutionService::run((int) $mixedPurchase['id']);
