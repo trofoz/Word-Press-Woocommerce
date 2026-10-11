@@ -148,6 +148,8 @@ jobs:
           WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
             wp eval-file "$GITHUB_WORKSPACE/tests/integration-http-checkout-assert.php" --path="$WP_PATH"
           WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-order-pay-render.php" --path="$WP_PATH"
+          WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
           WFPMS_BASE_URL=http://127.0.0.1:8099 \
           WFPMS_ADMIN_USER=test-admin \
           WFPMS_ADMIN_PASSWORD=test-only-admin-password \
