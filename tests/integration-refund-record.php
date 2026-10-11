@@ -11,6 +11,8 @@ $receiptId = $purchase === null ? 0 : (int) $purchase['accepted_receipt_id'];
 $receipt = $receiptId > 0 ? $wpdb->get_row($wpdb->prepare(
     'SELECT * FROM ' . PurchaseRepository::receipts_table() . ' WHERE id=%d', $receiptId
 ), ARRAY_A) : null;
+$snapshot = $purchase === null ? null : json_decode((string) $purchase['financial_snapshot'], true);
+$amountScale = is_array($snapshot) ? (int) ($snapshot['amount_scale'] ?? wc_get_price_decimals()) : -1;
 if (!in_array($scenario, ['create', 'duplicate', 'over_limit'], true) || !is_array($receipt)) {
     throw new RuntimeException('Accepted receipt fixture for refund recording is missing.');
 }
@@ -36,7 +38,7 @@ $_POST = [
 ];
 $_REQUEST = $_POST;
 
-register_shutdown_function(static function () use ($wpdb, $scenario, $receiptId, $refundId, $refundAmount): void {
+register_shutdown_function(static function () use ($wpdb, $scenario, $receiptId, $refundId, $refundAmount, $receipt, $amountScale): void {
     $rows = $wpdb->get_results($wpdb->prepare(
         'SELECT evidence,reason,actor_id FROM ' . PurchaseRepository::events_table()
         . ' WHERE receipt_id=%d AND kind=%s', $receiptId, 'refund_recorded'
@@ -57,7 +59,16 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $receiptId,
         $ok = count($events) === 1;
     }
     if (!$ok) {
-        fwrite(STDERR, 'FAIL: refund record case did not preserve its expected receipt-scoped evidence: ' . $scenario . "\n");
+        fwrite(STDERR, 'FAIL: refund record case did not preserve its expected receipt-scoped evidence: '
+            . $scenario . ' ' . wp_json_encode([
+                'scale' => $amountScale,
+                'refund_amount' => $refundAmount,
+                'receipt_amount' => $receipt['amount'] ?? null,
+                'receipt_currency' => $receipt['currency'] ?? null,
+                'receipt_status' => $receipt['transaction_status'] ?? null,
+                'receipt_classification' => $receipt['classification'] ?? null,
+                'events' => $events,
+            ], JSON_UNESCAPED_SLASHES) . "\n");
         exit(1);
     }
     fwrite(STDOUT, 'PASS: refund record case ' . $scenario . "\n");
