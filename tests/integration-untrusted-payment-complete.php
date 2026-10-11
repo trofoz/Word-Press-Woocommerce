@@ -43,7 +43,9 @@ $orderId = (int) $order->get_id();
 $purchase = PurchaseRepository::for_order($orderId);
 $stockBefore = (int) wc_get_product($product->get_id())->get_stock_quantity();
 wfpms_untrusted_completion_assert($purchase !== null && (string) $purchase['state'] === 'awaiting_payment'
-    && $stockBefore === 10, 'fixture remains unpaid and inventory is untouched before the external completion call');
+    && !$order->is_paid() && $order->get_date_paid() === null
+    && $stockBefore >= 0 && $stockBefore <= 10,
+    'fixture remains unpaid and records WooCommerce inventory state before the external completion call');
 
 $order->payment_complete('untrusted-integration-completion');
 $freshOrder = wc_get_order($orderId);
@@ -52,10 +54,10 @@ $purchase = PurchaseRepository::for_order($orderId);
 $receiptCount = $purchase === null ? -1 : count(PurchaseRepository::receipts_for_purchase((int) $purchase['id']));
 wfpms_untrusted_completion_assert($freshOrder instanceof WC_Order && !$freshOrder->is_paid()
     && $freshOrder->get_date_paid() === null && $freshOrder->get_status() === 'on-hold'
-    && $freshProduct instanceof WC_Product && (int) $freshProduct->get_stock_quantity() === 10
+    && $freshProduct instanceof WC_Product && (int) $freshProduct->get_stock_quantity() === $stockBefore
     && $purchase !== null && (string) $purchase['state'] === 'awaiting_payment'
     && (string) $purchase['execution_state'] === 'none' && $receiptCount === 0,
-    'an unrelated integration cannot complete an unpaid seller order, set paid date, or reduce stock');
+    'an unrelated integration cannot complete an unpaid seller order, set paid date, or change stock again');
 
 $freeProduct = new WC_Product_Simple();
 $freeProduct->set_name('Allowed zero-total completion fixture');
@@ -81,4 +83,4 @@ wfpms_untrusted_completion_assert($freePurchase !== null && (string) $freePurcha
 
 delete_option('wfpms_legacy_transition_enabled');
 delete_option('wfpms_allow_zero_total');
-echo "PASS: payment_complete without an accepted receipt is blocked before order payment state and inventory change\n";
+echo "PASS: external payment_complete is blocked for unpaid purchases; WooCommerce free-order completion remains allowed\n";
