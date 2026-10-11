@@ -86,13 +86,14 @@ $_POST = [
 ];
 $_REQUEST = $_POST;
 
+$selectionProof = '';
 if (in_array($scenario, $acceptedScenarios, true)) {
     if (wc_get_order($orderId)->get_status() !== 'on-hold'
         || (int) $purchase['accepted_receipt_id'] !== 0 || $purchase['execution_state'] !== 'none'
         || count(PurchaseRepository::receipts_for_purchase((int) $purchase['id'])) !== 0) {
         throw new RuntimeException('Selecting IBAN alone must keep on-hold with no accepted receipt or execution.');
     }
-    echo 'PASS: IBAN ' . $shape . ' selection stays on-hold until authorized receipt confirmation.' . "\n";
+    $selectionProof = 'PASS: IBAN ' . $shape . ' selection stays on-hold until authorized receipt confirmation.';
 }
 $completedTransitions = 0;
 $processingTransitions = 0;
@@ -110,7 +111,7 @@ add_action('woocommerce_payment_complete', static function (int $id) use ($order
         $paymentCompletions++;
     }
 });
-register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, $submittedAmount, $storedOccurredAt, $orderId, $acceptedScenarios, $isDuplicate, &$processingTransitions, &$completedTransitions, &$paymentCompletions): void {
+register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, $submittedAmount, $storedOccurredAt, $orderId, $acceptedScenarios, $isDuplicate, $selectionProof, &$processingTransitions, &$completedTransitions, &$paymentCompletions): void {
     // Confirmation queues execution; exercise the actual runner, including a duplicate delivery.
     PurchaseExecutionService::run((int) $purchase['id']);
     PurchaseExecutionService::run((int) $purchase['id']);
@@ -175,6 +176,7 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
             . $scenario . ' ' . wp_json_encode($diagnostic, JSON_UNESCAPED_SLASHES) . "\n");
         exit(1);
     }
+    if ($selectionProof !== '') { fwrite(STDOUT, $selectionProof . "\n"); }
     fwrite(STDOUT, 'PASS: IBAN receipt case ' . $scenario . '; order=' . $expectedStatus . '; completed transitions='
         . $completedTransitions . '; payment completions=' . $paymentCompletions . "\n");
 });
