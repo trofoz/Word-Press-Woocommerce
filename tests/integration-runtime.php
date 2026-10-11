@@ -173,6 +173,7 @@ $manualProduct->set_name('Manual seller product');
 $manualProduct->set_status('publish');
 $manualProduct->set_regular_price('15.00');
 $manualProduct->save();
+wp_set_object_terms($manualProduct->get_id(), [$categories[0]], 'product_cat');
 update_post_meta($manualProduct->get_id(), ProductRouting::META_SELLER_ID, $sellerIds[2]);
 update_option('wfpms_integration_manual_product_id', $manualProduct->get_id(), false);
 $resolvedManual = ProductRouting::resolve($manualProduct->get_id());

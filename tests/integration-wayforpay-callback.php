@@ -109,8 +109,52 @@ $sendApproved = static function (array $attempt, string $amount, string $currenc
     return $fields;
 };
 
+$sendRejected = static function (array $attempt, string $secret, string $mutation): void {
+    $payload = json_decode((string) $attempt['payload'], true);
+    $callbackUrl = is_array($payload) ? (string) ($payload['serviceUrl'] ?? '') : '';
+    wfpms_callback_integration_assert($callbackUrl !== '', 'Rejected callback fixture contains a serviceUrl.');
+    $fields = [
+        'merchantAccount' => (string) $attempt['merchant_account'],
+        'orderReference' => (string) $attempt['external_reference'],
+        'amount' => (string) $attempt['expected_amount'],
+        'currency' => (string) $attempt['currency'],
+        'authCode' => 'AUTH-REJECTED',
+        'cardPan' => '411111******1111',
+        'transactionStatus' => 'Approved',
+        'reasonCode' => '1100',
+    ];
+    if ($mutation === 'invalid_signature') {
+        $fields['merchantSignature'] = str_repeat('0', 32);
+    } elseif ($mutation === 'wrong_merchant') {
+        $fields['merchantAccount'] = 'unrecognized-integration-merchant';
+        $fields['merchantSignature'] = hash_hmac('md5', implode(';', array_values($fields)), $secret);
+    } else {
+        throw new InvalidArgumentException('Unknown rejected callback mutation.');
+    }
+    $response = wp_remote_post($callbackUrl, [
+        'timeout' => 10,
+        'headers' => ['Content-Type' => 'application/json'],
+        'body' => wp_json_encode($fields),
+    ]);
+    wfpms_callback_integration_assert(!is_wp_error($response), 'Rejected callback endpoint responds over HTTP.');
+    wfpms_callback_integration_assert(wp_remote_retrieve_response_code($response) === 400,
+        'Callback with ' . $mutation . ' is rejected with HTTP 400.');
+};
+
 global $wpdb;
 [$paidOrder, $paidPurchase, $paidAttempt] = $createAttempt();
+$sendRejected($paidAttempt, $secret, 'invalid_signature');
+$sendRejected($paidAttempt, $secret, 'wrong_merchant');
+$untrustedCallbackReceiptCount = (int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
+    (int) $paidPurchase['id']
+));
+$untrustedCallbackEventCount = (int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d',
+    (int) $paidPurchase['id']
+));
+wfpms_callback_integration_assert($untrustedCallbackReceiptCount === 0 && $untrustedCallbackEventCount === 0
+    && !$paidOrder->is_paid(), 'Invalid signature and unknown merchant callbacks create no financial evidence and do not pay the order.');
 $rotatedSecret = 'integration-rotated-only-' . wp_salt('auth');
 SellerRepository::save($sellerId, [
     'internal_label' => 'WayForPay callback integration seller',
@@ -229,6 +273,14 @@ wfpms_callback_integration_assert($wrongAmountPurchase !== null
     && is_array($wrongAmountReceipt) && (string) $wrongAmountReceipt['classification'] === 'needs_review'
     && (string) $wrongAmountReceipt['amount_raw'] === $wrongAmount
     && $wrongAmountOrder instanceof WC_Order && !$wrongAmountOrder->is_paid(), 'Approved callback with the wrong amount is recorded for review and does not pay the order.');
+$sendApproved($wrongAmountAttempt, $wrongAmount, (string) $wrongAmountAttempt['currency']);
+wfpms_callback_integration_assert((int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
+    (int) $wrongAmountPurchase['id']
+)) === 1 && (int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d',
+    (int) $wrongAmountPurchase['id']
+)) === 1, 'Retry of a signed wrong-amount callback preserves one review receipt and does not duplicate the event.');
 
 [$wrongCurrencyOrder, $wrongCurrencyPurchase, $wrongCurrencyAttempt] = $createAttempt();
 $wrongCurrency = (string) $wrongCurrencyAttempt['currency'] === 'UAH' ? 'USD' : 'UAH';
@@ -247,4 +299,4 @@ wfpms_callback_integration_assert($wrongCurrencyPurchase !== null
     && (string) $wrongCurrencyReceipt['currency'] === $wrongCurrency
     && $wrongCurrencyOrder instanceof WC_Order && !$wrongCurrencyOrder->is_paid(), 'Approved callback with the wrong currency is recorded for review and does not pay the order.');
 
-echo "PASS: signed callback retries, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";
+echo "PASS: signed callback retries, invalid signatures and merchants, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";
