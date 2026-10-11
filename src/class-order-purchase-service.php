@@ -6,9 +6,12 @@ namespace WfpMultiSeller;
 /** Builds a trusted seller snapshot from a finalized WooCommerce order. */
 final class OrderPurchaseService
 {
+    private static ?int $validatedOrderPayId = null;
+
     public static function boot(): void
     {
         add_action('wp', [self::class, 'prepare_order_pay_checkout'], 1, 1);
+        add_filter('pre_render_block', [self::class, 'render_order_pay_checkout_block'], 1, 3);
         add_action('woocommerce_check_cart_items', [self::class, 'validate_cart']);
         add_action('woocommerce_review_order_before_payment', [self::class, 'render_checkout_seller']);
         add_action('woocommerce_pay_order_before_payment', [self::class, 'render_checkout_seller']);
@@ -193,21 +196,6 @@ final class OrderPurchaseService
     public static function prepare_order_pay_checkout($wp = null): void
     {
         global $wp_query;
-        if (isset($_GET['order-pay'])) {
-            $debug = [
-                'hook' => 'wp',
-                'wp' => is_object($wp),
-                'main_query' => is_object($wp_query),
-                'pay_for_order' => isset($_GET['pay_for_order']) && is_scalar($_GET['pay_for_order'])
-                    ? (string) wp_unslash((string) $_GET['pay_for_order']) : 'missing',
-                'page_id' => is_object($wp_query) ? (int) $wp_query->get('page_id') : -1,
-                'checkout_page_id' => function_exists('wc_get_page_id') ? (int) wc_get_page_id('checkout') : -1,
-                'posts' => is_object($wp_query) && is_array($wp_query->posts) ? count($wp_query->posts) : -1,
-            ];
-            if (!headers_sent()) {
-                header('X-WFPMS-Order-Pay-Debug: ' . rawurlencode(wp_json_encode($debug)));
-            }
-        }
         if (!is_object($wp_query)
             || !isset($_GET['order-pay'], $_GET['pay_for_order'], $_GET['key'])
             || !is_scalar($_GET['order-pay']) || !is_scalar($_GET['pay_for_order']) || !is_scalar($_GET['key'])
@@ -220,6 +208,7 @@ final class OrderPurchaseService
         if (!$order instanceof \WC_Order || !hash_equals($order->get_order_key(), $key)) {
             return;
         }
+        self::$validatedOrderPayId = $orderId;
         if (is_object($wp)) {
             $wp->query_vars['order-pay'] = $orderId;
         }
@@ -229,23 +218,19 @@ final class OrderPurchaseService
                 $post->post_content = '[woocommerce_checkout]';
             }
         }
-        if (!headers_sent()) {
-            $wcEndpoint = function_exists('WC') && WC()->query && method_exists(WC()->query, 'get_current_endpoint')
-                ? (string) WC()->query->get_current_endpoint() : 'unavailable';
-            $diagnostic = [
-                'endpoint' => $wcEndpoint,
-                'global_order_pay' => is_object($wp) ? (int) ($wp->query_vars['order-pay'] ?? 0) : -1,
-                'query_order_pay' => (int) $wp_query->get('order-pay'),
-                'checkout_page' => function_exists('is_page') && is_page(wc_get_page_id('checkout')),
-                'is_checkout' => function_exists('is_checkout') && is_checkout(),
-                'cart_loaded' => function_exists('WC') && WC()->cart !== null,
-                'main_post_shortcode' => isset($wp_query->posts[0]) && $wp_query->posts[0] instanceof \WP_Post
-                    && has_shortcode($wp_query->posts[0]->post_content, 'woocommerce_checkout'),
-                'queried_post_shortcode' => $wp_query->queried_object instanceof \WP_Post
-                    && has_shortcode($wp_query->queried_object->post_content, 'woocommerce_checkout'),
-            ];
-            header('X-WFPMS-Order-Pay-State: ' . rawurlencode(wp_json_encode($diagnostic)));
+    }
+
+    /** Render the classic pay form inside block themes whose checkout block omits order-pay. */
+    public static function render_order_pay_checkout_block($preRender, array $parsedBlock, $parentBlock = null)
+    {
+        if ($preRender !== null
+            || self::$validatedOrderPayId === null
+            || ($parsedBlock['blockName'] ?? '') !== 'core/post-content'
+            || !function_exists('get_the_ID')
+            || get_the_ID() !== wc_get_page_id('checkout')) {
+            return $preRender;
         }
+        return do_shortcode('[woocommerce_checkout]');
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string
