@@ -8,6 +8,9 @@ use WfpMultiSeller\PurchaseRepository;
 use WfpMultiSeller\PurchaseExecutionService;
 
 global $wpdb;
+if (get_option('blogname') !== 'Disposable WayForPay integration test') {
+    throw new RuntimeException('Refusing synthetic legacy fixtures outside the disposable CI site.');
+}
 wp_set_current_user((int) get_user_by('login', 'test-admin')->ID);
 $mode = getenv('WFPMS_LEGACY_MODE') ?: 'state';
 $fixture = get_option('wfpms_legacy_operator_fixture', []);
@@ -32,7 +35,7 @@ if ($mode === 'seed') {
     update_option('woocommerce_wayforpay_settings', [
         'enabled' => 'yes', 'merchant_account' => 'synthetic-operator-history',
         'secret_key' => 'synthetic-operator-history-secret', 'title' => 'Synthetic original gateway',
-        'description' => '', 'showlogo' => 'no', 'returnUrl_m' => '',
+        'description' => '', 'showlogo' => 'no', 'returnUrl' => '', 'returnUrl_m' => '',
     ], false);
     $product = new WC_Product_Simple();
     $product->set_name('Synthetic legacy operator virtual item');
@@ -105,6 +108,17 @@ if ($mode === 'seed') {
     PurchaseExecutionService::run((int) $purchase['id']);
     PurchaseExecutionService::run((int) $purchase['id']);
     echo wp_json_encode(['payment_complete' => $completionCount, 'completed' => $statusCount]);
+    return;
+} elseif ($mode === 'order') {
+    $orderId = (int) getenv('WFPMS_LEGACY_ORDER_ID');
+    $purchase = PurchaseRepository::for_order($orderId);
+    echo wp_json_encode([
+        'purchase' => $purchase,
+        'attempts' => $purchase ? PurchaseRepository::attempts_for_purchase((int) $purchase['id']) : [],
+        'receipts' => $purchase ? PurchaseRepository::receipts_for_purchase((int) $purchase['id']) : [],
+        'events' => $purchase ? PurchaseRepository::events_for_purchase((int) $purchase['id']) : [],
+        'status' => wc_get_order($orderId)->get_status(),
+    ]);
     return;
 }
 $gateway = WC()->payment_gateways()->payment_gateways()['wayforpay'] ?? null;

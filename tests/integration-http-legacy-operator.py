@@ -74,7 +74,7 @@ def assert_review(label, before=None):
     state = inspect()[label + '_state']
     assert len(state['receipts']) == 1 and state['receipts'][0]['classification'] == 'needs_review', state
     assert state['purchase']['state'] == 'review' and state['status'] == 'pending', state
-    assert state['mapping']['config_id'] == inspect()['import']['config_id'], state
+    assert int(state['mapping']['config_id']) == int(inspect()['import']['config_id']), state
     if before is not None:
         assert state == before, 'Duplicate callback changed durable evidence'
     assert inspect('run', state['purchase']['order_id']) == {'payment_complete': 0, 'completed': 0}
@@ -90,6 +90,9 @@ assert status == 200 and 'wp-login.php' not in url, 'Disposable admin login fail
 post('wfpms_enable_standalone_mode', {'confirm_standalone': 1}, 'standalone_enabled')
 state = inspect()
 assert state['standalone'] and not state['owner'] and state['upstream_registered']
+issued_before_switch = inspect('new_payment')
+assert issued_before_switch['result'] == 'success'
+issued_evidence = inspect('order', issued_before_switch['order_id'])
 
 if os.environ.get('WFPMS_LEGACY_BASELINE') == '1':
     failures = []
@@ -145,15 +148,16 @@ try:
         assert callback(data)[0] == 200
         assert_review(label, before)
         print('PASS: original inactive; ' + label + ' pinned callback ACK verified; duplicate receipt/event/completion counts unchanged', flush=True)
-    code, _ = callback(payload(str(fixture['unmapped']) + '_woo_w4p_99'))
+    code, body = callback(payload(str(fixture['unmapped']) + '_woo_w4p_99'))
     assert code == 503 and inspect()['unmapped_state']['purchase'] is None
+    assert body == '', ('Unknown reference was unexpectedly acknowledged', body)
     assert callback(payload('unsupported-synthetic-reference'))[0] == 400
     # Disposable runner uses WooCommerce's default file backend, also readable in Status > Logs.
     log_dir = subprocess.check_output(['wp', 'eval', 'echo WC_LOG_DIR;', '--path=' + WP], text=True)
     log_output = ''.join(path.read_text() for path in Path(log_dir).rglob('*wfpms-legacy*.log'))
     assert 'unmapped_reference_no_upstream' in log_output and 'historical_config_unavailable' in log_output, 'Operator diagnostic missing'
     assert 'synthetic-operator-history-secret' not in log_output and 'synthetic-operator-rotated-secret' not in log_output
-    print('PASS: unknown reference HTTP 503, unsupported format HTTP 400; no accepted payment; WooCommerce operator diagnostics present', flush=True)
+    print('PASS: unknown reference HTTP 503 with empty body, unsupported format HTTP 400; no accepted payment; WooCommerce operator diagnostics present', flush=True)
 finally:
     plugin('activate')
 
@@ -182,6 +186,8 @@ status, _, url = request('/wp-login.php', urllib.parse.urlencode({
 assert status == 200 and 'wp-login.php' not in url
 assert request('/wp-admin/admin-post.php', urllib.parse.urlencode(dict(release, confirm_release=1)).encode(), restricted)[0] == 403
 assert inspect()['owner']
+post('wfpms_release_legacy_callback', {}, 'callback_release_blocked')
+assert inspect()['owner']
 post('wfpms_release_legacy_callback', {'confirm_release': 1}, 'callback_released')
 after = inspect()
 assert not after['owner'] and not after['transition'] and after['standalone'] and after['upstream_registered']
@@ -191,6 +197,11 @@ returned = inspect('original_payment')
 assert callback(payload(str(returned['unmapped']) + '_woo_w4p_100'))[0] == 200
 assert inspect()['unmapped_state']['status'] == 'completed' and inspect()['unmapped_state']['purchase'] is None
 print('PASS: supported ownership return preserves mapped financial records and restores original handler; nonce and login required', flush=True)
+assert inspect('order', issued_before_switch['order_id']) == issued_evidence, 'Return altered an already-issued new fork payment'
+issued_data = payload(issued_before_switch['attempt']['external_reference'], 'synthetic-operator-new', 'synthetic-operator-new-secret')
+assert callback(issued_data, 'wfpms_wayforpay')[0] == 200
+assert inspect('run', issued_before_switch['order_id']) == {'payment_complete': 1, 'completed': 1}
+print('PASS: new fork attempt issued before migration retains its evidence and completes after ownership return', flush=True)
 
 new = inspect('new_payment')
 assert new['result'] == 'success' and new['attempt']['merchant_account'] == 'synthetic-operator-new'
