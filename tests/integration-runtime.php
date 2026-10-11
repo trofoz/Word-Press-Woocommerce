@@ -242,6 +242,11 @@ WfpMultiSeller\PurchaseExecutionService::schedule((int) $purchase['id']);
 remove_filter('pre_schedule_event', $rejectSchedule, 10);
 wfpms_integration_assert(!wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'failed one-off execution scheduling leaves no event');
 
+WfpMultiSeller\PurchaseExecutionService::expire_due();
+wfpms_integration_assert(wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]),
+    'hourly recovery schedules paid purchases whose execution remained pending');
+wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
+
 $expiredBallastIds = [];
 $expiredAt = gmdate('Y-m-d H:i:s', current_time('timestamp', true) - 3600);
 for ($index = 1; $index <= 100; $index++) {
@@ -267,7 +272,6 @@ $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'updated_at' => $expiredAt,
 ], ['id' => (int) $purchase['id']]);
 WfpMultiSeller\PurchaseExecutionService::expire_due();
-wfpms_integration_assert(wp_next_scheduled('wfpms_process_execution', [(int) $purchase['id']]), 'hourly recovery schedules paid purchases whose execution remained pending');
 wfpms_integration_assert((string) WfpMultiSeller\PurchaseRepository::for_order((int) $order->get_id())['state'] === 'expired',
     'old expired purchases do not starve newly due purchases from the expiry queue');
 foreach ($expiredBallastIds as $expiredBallastId) {
