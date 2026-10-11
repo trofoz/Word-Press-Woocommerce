@@ -31,14 +31,40 @@ $before = [
     )),
 ];
 $legacyTable = WfpMultiSeller\LegacyMigration::migrations_table();
-wfpms_schema_assert($wpdb->query('DROP TABLE ' . $legacyTable) !== false, 'v3 fixture drops the v4-only legacy migration table');
-update_option('wfpms_schema_version', 3, false);
+$legacyTableExists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable;
+wfpms_schema_assert($legacyTableExists, 'v4 fixture contains the legacy migration table');
+$receiptsTable = PurchaseRepository::receipts_table();
+$legacyReceipt = [
+    'purchase_id' => $purchaseId,
+    'attempt_id' => 0,
+    'source' => 'wayforpay',
+    'source_scope' => 'schema-upgrade-merchant',
+    'external_id' => 'schema-upgrade-reference',
+    'amount' => '1.00',
+    'amount_raw' => '1.00',
+    'currency' => 'UAH',
+    'transaction_status' => 'operator_confirmed',
+    'classification' => 'needs_review',
+    'recorded_at' => current_time('mysql', true),
+];
+wfpms_schema_assert($wpdb->insert($receiptsTable, $legacyReceipt) === 1, 'v4 fixture stores a WayForPay receipt before removing the new provider reference column');
+$legacyReceiptId = (int) $wpdb->insert_id;
+$before['receipt_count']++;
+wfpms_schema_assert($wpdb->query("ALTER TABLE {$receiptsTable} DROP COLUMN provider_reference") !== false,
+    'v4 fixture removes the v5 provider reference column');
+update_option('wfpms_schema_version', 4, false);
 
 Installer::maybe_upgrade();
-$tableExists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable;
-wfpms_schema_assert($tableExists, 'v3 to v4 upgrade creates the legacy migration table');
+wfpms_schema_assert($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable,
+    'v4 to v5 upgrade preserves the legacy migration table');
 wfpms_schema_assert((int) get_option('wfpms_schema_version') === Installer::SCHEMA_VERSION,
     'schema version advances only after the upgrade');
+$migratedReceipt = $wpdb->get_row($wpdb->prepare(
+    "SELECT provider_reference FROM {$receiptsTable} WHERE id=%d", $legacyReceiptId
+), ARRAY_A);
+wfpms_schema_assert(is_array($migratedReceipt)
+    && (string) $migratedReceipt['provider_reference'] === 'schema-upgrade-reference',
+    'schema upgrade backfills the provider reference from existing WayForPay receipts');
 
 $after = PurchaseRepository::for_order($orderId);
 wfpms_schema_assert($after !== null
@@ -62,4 +88,4 @@ wfpms_schema_assert((int) get_option('wfpms_schema_version') === Installer::SCHE
     && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable,
     'repeated upgrade check is idempotent');
 
-echo "PASS: schema v3 to v4 upgrade and existing financial data preservation\n";
+echo "PASS: schema v4 to v5 provider reference upgrade and existing financial data preservation\n";

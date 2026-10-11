@@ -1,0 +1,18 @@
+{"evidence_id":"e01","source_id":"wfp_purchase_852102","claim_id":"C01","quote":"Unique number of the order in merchant's system","locator":"Purchase request parameters"}
+{"evidence_id":"e02","source_id":"wfp_response_codes_852131","claim_id":"C01","quote":"1112 Duplicate Order ID","locator":"Response code 1112"}
+{"evidence_id":"e03","source_id":"wfp_purchase_852102","claim_id":"C02","quote":"repayUrl: repeated payment within orderTimeout or orderLifetime","locator":"Service URL callback fields"}
+{"evidence_id":"e04","source_id":"wfp_purchase_uk_852102","claim_id":"C02","quote":"orderTimeout sets the interval during which repeated payment is available","locator":"Purchase request parameters"}
+{"evidence_id":"e05","source_id":"wfp_check_status_852117","claim_id":"C03","quote":"Check Status checks payment status by orderReference","locator":"Check Status introduction"}
+{"evidence_id":"e06","source_id":"wfp_check_status_852117","claim_id":"C03","quote":"refundAmount — amount of all refunds","locator":"Check Status response parameters"}
+{"evidence_id":"e07","source_id":"wfp_transaction_list_1736786","claim_id":"C04","quote":"transactionList — list of transactions for the requested period","locator":"TRANSACTION_LIST response parameters"}
+{"evidence_id":"e08","source_id":"wfp_transaction_list_1736786","claim_id":"C04","quote":"transactionType, orderReference, amount, transactionStatus, processingDate","locator":"TRANSACTION_LIST response schema"}
+{"evidence_id":"e09","source_id":"wfp_purchase_852102","claim_id":"C05","quote":"send requests during 4 days","locator":"Notification of merchant about status of transaction"}
+{"evidence_id":"e10","source_id":"wfp_merchant_credentials_3342958","claim_id":"C06","quote":"Merchant Login and Merchant Secret Key are available in merchant settings","locator":"Merchant credentials"}
+{"evidence_id":"e11","source_id":"wfp_merchant_edit_853327","claim_id":"C07","quote":"Merchant Edit is used to change partner details","locator":"Merchant Edit introduction"}
+{"evidence_id":"e12","source_id":"wfp_refund_852115","claim_id":"C08","quote":"Refunds through M-portal or API","locator":"Refund introduction"}
+{"evidence_id":"e13","source_id":"wfp_refund_852115","claim_id":"C08","quote":"orderReference, amount, currency, comment","locator":"Refund request parameters"}
+{"evidence_id":"e14","source_id":"wfp_refund_852115","claim_id":"C09","quote":"Refunded, Voided, Declined","locator":"Refund response parameters"}
+{"evidence_id":"e15","source_id":"wfp_payment_status_help_3342475","claim_id":"C09","quote":"RefundInProcessing may occur when the shop balance is insufficient","locator":"Transaction statuses"}
+{"evidence_id":"e16","source_id":"wfp_refund_help_3342455","claim_id":"C10","quote":"Full or partial refunds are available; refunded money returns to the same card","locator":"Refunds in M-portal"}
+{"evidence_id":"e17","source_id":"wfp_refund_help_3342455","claim_id":"C10","quote":"The shop must have sufficient balance for the refund","locator":"Refund conditions"}
+{"evidence_id":"e18","source_id":"wfp_check_status_852117","claim_id":"C11","quote":"The documented response signature fields exclude refundAmount","locator":"Check Status response signature formula and response schema"}

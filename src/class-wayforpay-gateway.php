@@ -394,7 +394,10 @@ final class WayForPayGateway extends \WC_Payment_Gateway
                             'attempt_id' => (int) $attempt['id'],
                             'source' => 'wayforpay',
                             'source_scope' => (string) $attempt['merchant_account'],
-                            'external_id' => $reference,
+                            'external_id' => hash('sha256', serialize([
+                                'wayforpay', (string) $attempt['merchant_account'], $reference, $eventKey,
+                            ])),
+                            'provider_reference' => $reference,
                             'amount' => preg_match('/\A\d{1,14}(?:\.\d{1,6})?\z/', (string) $amount) === 1 ? $amount : '0',
                             'amount_raw' => substr((string) $data['amount'], 0, 191),
                             'currency' => preg_match('/\A[A-Z]{3}\z/', $currency) === 1 ? $currency : 'XXX',

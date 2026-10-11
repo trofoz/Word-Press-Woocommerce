@@ -468,7 +468,15 @@ final class PaymentOperations
             $receipts = PurchaseRepository::receipts_for_purchase((int) $purchase['id']);
             $details = [];
             foreach ($receipts as $receipt) {
-                $details[] = sprintf('%s %s · %s · %s', $receipt['amount_raw'], $receipt['currency'], $receipt['classification'], $receipt['source']);
+                $reference = (string) ($receipt['provider_reference'] ?? '');
+                $details[] = sprintf('#%d %s %s · %s · %s%s',
+                    (int) $receipt['id'],
+                    $receipt['amount_raw'],
+                    $receipt['currency'],
+                    $receipt['classification'],
+                    $receipt['source'],
+                    $reference === '' ? '' : ' · ref ' . $reference
+                );
             }
             $orderUrl = $order instanceof \WC_Order ? $order->get_edit_order_url() : '';
             echo '<tr><td>' . ($orderUrl !== '' ? '<a href="' . esc_url($orderUrl) . '">#' . esc_html((string) $purchase['order_id']) . '</a>' : '#' . esc_html((string) $purchase['order_id']))

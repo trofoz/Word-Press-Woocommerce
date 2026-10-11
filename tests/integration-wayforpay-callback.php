@@ -70,18 +70,21 @@ $createAttempt = static function () use ($product, $gateway): array {
     return [$order, $purchase, $attempt];
 };
 
-$sendApproved = static function (array $attempt, string $amount, string $currency) use ($secret): array {
+$sendApproved = static function (array $attempt, string $amount, string $currency, string $authCode = 'AUTH-TEST', ?string $signingSecret = null): array {
+    $config = $signingSecret === null ? SellerRepository::config((int) $attempt['config_id']) : null;
+    $callbackSecret = $signingSecret ?? ($config === null ? null : SecretStore::decrypt((string) $config['secret_ciphertext']));
+    wfpms_callback_integration_assert(is_string($callbackSecret) && $callbackSecret !== '', 'Attempt retains its immutable signing credential version.');
     $fields = [
         'merchantAccount' => (string) $attempt['merchant_account'],
         'orderReference' => (string) $attempt['external_reference'],
         'amount' => $amount,
         'currency' => $currency,
-        'authCode' => 'AUTH-TEST',
+        'authCode' => $authCode,
         'cardPan' => '411111******1111',
         'transactionStatus' => 'Approved',
         'reasonCode' => '1100',
     ];
-    $fields['merchantSignature'] = hash_hmac('md5', implode(';', array_values($fields)), $secret);
+    $fields['merchantSignature'] = hash_hmac('md5', implode(';', array_values($fields)), $callbackSecret);
     $payload = json_decode((string) $attempt['payload'], true);
     $callbackUrl = is_array($payload) ? (string) ($payload['serviceUrl'] ?? '') : '';
     wfpms_callback_integration_assert($callbackUrl !== '', 'Signed Purchase attempt contains a serviceUrl.');
@@ -99,7 +102,7 @@ $sendApproved = static function (array $attempt, string $amount, string $currenc
         && ($ack['status'] ?? '') === 'accept'
         && isset($ack['time'], $ack['signature'])
         && hash_equals(
-            hash_hmac('md5', $fields['orderReference'] . ';accept;' . (string) $ack['time'], $secret),
+            hash_hmac('md5', $fields['orderReference'] . ';accept;' . (string) $ack['time'], $callbackSecret),
             (string) $ack['signature']
         ), 'Callback acknowledges the signed event using the WayForPay response signature.');
 
@@ -108,7 +111,32 @@ $sendApproved = static function (array $attempt, string $amount, string $currenc
 
 global $wpdb;
 [$paidOrder, $paidPurchase, $paidAttempt] = $createAttempt();
-$paidFields = $sendApproved($paidAttempt, (string) $paidAttempt['expected_amount'], (string) $paidAttempt['currency']);
+$rotatedSecret = 'integration-rotated-only-' . wp_salt('auth');
+SellerRepository::save($sellerId, [
+    'internal_label' => 'WayForPay callback integration seller',
+    'legal_name' => 'WayForPay callback test recipient',
+    'tax_id' => 'CALLBACK-TEST',
+], [
+    'recipient_name' => 'WayForPay callback test recipient',
+    'iban' => 'UA213223130000026007233566001',
+    'bank_name' => 'Integration Bank',
+    'purpose_template' => 'Callback integration order {order_number}',
+    'merchant_account' => 'integration-merchant',
+    'merchant_domain' => (string) wp_parse_url(home_url('/'), PHP_URL_HOST),
+    'card_enabled' => 1,
+    'iban_enabled' => 0,
+    'secret_plaintext' => $rotatedSecret,
+    'operator_checked' => false,
+], SecretStore::encrypt($rotatedSecret), $adminId);
+$currentConfig = SellerRepository::current_config($sellerId);
+$persistedAttemptConfigId = (int) $wpdb->get_var($wpdb->prepare(
+    'SELECT config_id FROM ' . PurchaseRepository::attempts_table() . ' WHERE id=%d',
+    (int) $paidAttempt['id']
+));
+wfpms_callback_integration_assert($currentConfig !== null
+    && (int) $currentConfig['id'] !== (int) $paidAttempt['config_id']
+    && $persistedAttemptConfigId === (int) $paidAttempt['config_id'], 'Merchant key rotation appends a new seller configuration while keeping the issued attempt pinned.');
+$paidFields = $sendApproved($paidAttempt, (string) $paidAttempt['expected_amount'], (string) $paidAttempt['currency'], 'AUTH-TEST', $secret);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null
     && (string) $paidPurchase['state'] === 'paid'
@@ -123,7 +151,7 @@ $eventCount = (int) $wpdb->get_var($wpdb->prepare(
 ));
 wfpms_callback_integration_assert($receiptCount === 1 && $eventCount === 1, 'Accepted callback stores one receipt and one event.');
 
-$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency']);
+$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-TEST', $secret);
 $receiptCountAfterRetry = (int) $wpdb->get_var($wpdb->prepare(
     'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
     (int) $paidPurchase['id']
@@ -151,7 +179,33 @@ $executionCount = (int) $wpdb->get_var($wpdb->prepare(
     (int) $paidPurchase['id'], 'execution_done'
 ));
 wfpms_callback_integration_assert($executionCount === 1, 'WooCommerce payment completion is recorded once.');
-$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency']);
+$firstAcceptedReceiptId = (int) $paidPurchase['accepted_receipt_id'];
+$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-SECOND', $secret);
+$paidPurchase = PurchaseRepository::for_order($paidOrderId);
+$sameReferenceReceipts = $wpdb->get_results($wpdb->prepare(
+    'SELECT id,external_id,provider_reference,classification FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d ORDER BY id ASC',
+    (int) $paidPurchase['id']
+), ARRAY_A);
+$distinctEventCount = (int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
+    (int) $paidPurchase['id'], 'callback_Approved'
+));
+wfpms_callback_integration_assert($paidPurchase !== null
+    && (string) $paidPurchase['state'] === 'paid_review'
+    && (string) $paidPurchase['execution_state'] === 'done'
+    && (int) $paidPurchase['accepted_receipt_id'] === $firstAcceptedReceiptId
+    && is_array($sameReferenceReceipts) && count($sameReferenceReceipts) === 2
+    && (string) $sameReferenceReceipts[0]['provider_reference'] === (string) $paidAttempt['external_reference']
+    && (string) $sameReferenceReceipts[1]['provider_reference'] === (string) $paidAttempt['external_reference']
+    && (string) $sameReferenceReceipts[0]['external_id'] !== (string) $sameReferenceReceipts[1]['external_id']
+    && (string) $sameReferenceReceipts[1]['classification'] === 'needs_review'
+    && $distinctEventCount === 2, 'Distinct signed Approved evidence on the same reference is retained for review without changing accepted payment or replaying fulfillment.');
+$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-SECOND', $secret);
+wfpms_callback_integration_assert((int) $wpdb->get_var($wpdb->prepare(
+    'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d',
+    (int) $paidPurchase['id']
+)) === 2, 'Retry of the second signed callback does not duplicate its receipt.');
+$sendApproved($paidAttempt, (string) $paidFields['amount'], (string) $paidFields['currency'], 'AUTH-TEST', $secret);
 $paidPurchase = PurchaseRepository::for_order((int) $paidOrder->get_id());
 wfpms_callback_integration_assert($paidPurchase !== null && (string) $paidPurchase['execution_state'] === 'done'
     && (int) $wpdb->get_var($wpdb->prepare(
@@ -193,4 +247,4 @@ wfpms_callback_integration_assert($wrongCurrencyPurchase !== null
     && (string) $wrongCurrencyReceipt['currency'] === $wrongCurrency
     && $wrongCurrencyOrder instanceof WC_Order && !$wrongCurrencyOrder->is_paid(), 'Approved callback with the wrong currency is recorded for review and does not pay the order.');
 
-echo "PASS: signed Approved callback, duplicate callback, amount and currency mismatches, and WooCommerce payment completion.\n";
+echo "PASS: signed callback retries, second receipt on one reference, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";

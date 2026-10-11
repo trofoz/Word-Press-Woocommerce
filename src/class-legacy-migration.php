@@ -501,6 +501,7 @@ final class LegacyMigration
                                 'source' => 'wayforpay',
                                 'source_scope' => (string) $config['merchant_account'],
                                 'external_id' => $reference,
+                                'provider_reference' => $reference,
                                 'amount' => $validAmount ? $amount : '0',
                                 'amount_raw' => substr((string) $data['amount'], 0, 191),
                                 'currency' => preg_match('/\A[A-Z]{3}\z/', strtoupper((string) $data['currency'])) === 1 ? strtoupper((string) $data['currency']) : 'XXX',

@@ -1,0 +1,13 @@
+{
+  "query": "What do official WayForPay docs say about multiple successful transactions per orderReference, Merchant SecretKey rotation overlap, and refund evidence?",
+  "scope": "Universal WayForPay multi-seller WooCommerce fork only; official WayForPay documentation/help center only.",
+  "mode": "focused",
+  "retrieved_at_utc": "2026-10-11T06:35:36Z",
+  "sources_count": 11,
+  "primary_sources_only": true,
+  "limitations": [
+    "All sources are published by one provider and are not independent verification of backend behavior.",
+    "No WayForPay merchant API calls, real/test payment requests, or refunds were executed.",
+    "Absence of a documented rule is not proof that the provider has no such internal rule."
+  ]
+}

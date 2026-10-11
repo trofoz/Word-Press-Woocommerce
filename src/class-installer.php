@@ -5,7 +5,7 @@ namespace WfpMultiSeller;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = 4;
+    public const SCHEMA_VERSION = 5;
 
     public static function activate(): void
     {
@@ -135,6 +135,7 @@ final class Installer
             source varchar(16) NOT NULL,
             source_scope varchar(191) NOT NULL,
             external_id varchar(191) NOT NULL,
+            provider_reference varchar(191) NOT NULL DEFAULT '',
             amount decimal(20,6) NOT NULL,
             amount_raw varchar(191) NOT NULL,
             currency char(3) NOT NULL,
@@ -189,6 +190,21 @@ final class Installer
             }
         }
 
+        if (!self::upgrade_provider_reference($receipts)) {
+            return;
+        }
+
         update_option('wfpms_schema_version', self::SCHEMA_VERSION, false);
+    }
+
+    private static function upgrade_provider_reference(string $receipts): bool
+    {
+        global $wpdb;
+        if ($wpdb->query(
+            "UPDATE {$receipts} SET provider_reference=external_id WHERE source='wayforpay' AND provider_reference=''"
+        ) === false) {
+            return false;
+        }
+        return true;
     }
 }
