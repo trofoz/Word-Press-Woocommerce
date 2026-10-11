@@ -148,11 +148,25 @@ jobs:
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-record.php" --path="$WP_PATH"
           done
           refund_execution_status=0
-          for execution_case in card iban_no_attempt paid_review extra_receipt recovery; do
+          for execution_case in card iban_no_attempt paid_review extra_receipt partial recovery recovery_refunded recovery_partial recovery_voided recovery_cancelled; do
             WFPMS_REFUND_EXECUTION_CASE="$execution_case" \
               wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-execution.php" --path="$WP_PATH" || refund_execution_status=1
           done
           [[ "$refund_execution_status" == 0 ]] || { echo 'Refund/execution regressions failed'; exit 1; }
+          WFPMS_REFUND_EXECUTION_CASE=concurrency_prepare \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-refund-execution.php" --path="$WP_PATH"
+          WFPMS_EXECUTION_CONCURRENCY_MODE=worker \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-execution-concurrency.php" --path="$WP_PATH" &
+          execution_worker_one=$!
+          WFPMS_EXECUTION_CONCURRENCY_MODE=worker \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-execution-concurrency.php" --path="$WP_PATH" &
+          execution_worker_two=$!
+          execution_worker_status=0
+          wait "$execution_worker_one" || execution_worker_status=1
+          wait "$execution_worker_two" || execution_worker_status=1
+          [[ "$execution_worker_status" == 0 ]] || { echo 'Concurrent execution worker failed'; exit 1; }
+          WFPMS_EXECUTION_CONCURRENCY_MODE=assert \
+            wp eval-file "$GITHUB_WORKSPACE/tests/integration-execution-concurrency.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-expired-payment-form.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-schema-upgrade.php" --path="$WP_PATH"
           WFPMS_BASE_URL=http://127.0.0.1:8099 \

@@ -252,7 +252,27 @@ final class PaymentOperations
                 get_current_user_id(),
                 (int) $lockedReceipt['first_event_id']
             );
-            if ($eventId < 1 || $wpdb->query('COMMIT') === false) {
+            if ($eventId < 1) {
+                throw new \RuntimeException('Could not save refund evidence.');
+            }
+            // Under the same order lock, revoke pending execution when its accepted receipt no longer covers the purchase.
+            if ((string) $lockedPurchase['execution_state'] === 'pending'
+                && in_array((string) $lockedPurchase['state'], ['paid', 'paid_review'], true)
+                && !PurchaseExecutionService::is_financially_accepted($lockedPurchase)) {
+                if ($wpdb->update(PurchaseRepository::purchases_table(), [
+                    'state' => 'paid_review',
+                    'execution_state' => 'review',
+                    'execution_error_code' => 'refunded_before_execution',
+                    'execution_updated_at' => current_time('mysql', true),
+                    'updated_at' => current_time('mysql', true),
+                ], ['id' => (int) $lockedPurchase['id'], 'execution_state' => 'pending']) !== 1) {
+                    throw new \RuntimeException('Could not block refunded execution.');
+                }
+                self::insert_event((int) $lockedPurchase['id'], (int) $lockedReceipt['attempt_id'], $receiptId,
+                    'execution_needs_review', ['error_code' => 'refunded_before_execution', 'refund_event_id' => $eventId],
+                    $reason, get_current_user_id(), $eventId);
+            }
+            if ($wpdb->query('COMMIT') === false) {
                 throw new \RuntimeException('Could not commit refund evidence.');
             }
         } catch (\Throwable $error) {
@@ -262,6 +282,39 @@ final class PaymentOperations
             PurchaseRepository::release_order_lock((int) $purchase['order_id']);
         }
         self::redirect('refund_recorded');
+    }
+
+    /** Accepted evidence must cover the obligation after this receipt's recorded refunds; never aggregate review receipts. */
+    public static function receipt_covers_purchase(array $receipt, array $purchase): bool
+    {
+        global $wpdb;
+        $snapshot = json_decode((string) ($purchase['financial_snapshot'] ?? ''), true);
+        $scale = is_array($snapshot) ? (int) ($snapshot['amount_scale'] ?? -1) : -1;
+        $required = self::decimal_units((string) ($purchase['amount'] ?? ''), $scale);
+        $gross = self::decimal_units((string) ($receipt['amount'] ?? ''), $scale);
+        if ($required === null || $required === '0' || $gross === null
+            || (int) ($receipt['purchase_id'] ?? 0) !== (int) ($purchase['id'] ?? 0)
+            || (string) ($receipt['currency'] ?? '') !== (string) ($purchase['currency'] ?? '')) {
+            return false;
+        }
+        $events = $wpdb->get_col($wpdb->prepare(
+            'SELECT evidence FROM ' . PurchaseRepository::events_table()
+            . ' WHERE purchase_id=%d AND receipt_id=%d AND kind=%s',
+            (int) $purchase['id'], (int) $receipt['id'], 'refund_recorded'
+        ));
+        if (!is_array($events) || $wpdb->last_error !== '') {
+            return false;
+        }
+        $refunded = '0';
+        foreach ($events as $json) {
+            $event = json_decode((string) $json, true);
+            $units = is_array($event) ? self::decimal_units((string) ($event['amount'] ?? ''), $scale) : null;
+            if ($units === null || $units === '0' || (string) ($event['currency'] ?? '') !== (string) $receipt['currency']) {
+                return false;
+            }
+            $refunded = self::add_units($refunded, $units);
+        }
+        return self::compare_units($gross, self::add_units($required, $refunded)) >= 0;
     }
 
     public static function save_policy(): void

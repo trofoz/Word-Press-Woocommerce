@@ -321,8 +321,18 @@ $wpdb->update(SellerRepository::sellers_table(), ['active' => 1], ['id' => $sell
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
 update_option('wfpms_integration_iban_order_id', (int) $order->get_id(), false);
 update_option('wfpms_integration_iban_expires_at', (string) $purchase['expires_at'], false);
+$recoveryReceiptInserted = $wpdb->insert(WfpMultiSeller\PurchaseRepository::receipts_table(), [
+    'purchase_id' => (int) $purchase['id'], 'attempt_id' => 0,
+    'source' => 'iban', 'source_scope' => 'pending-recovery-fixture', 'external_id' => (string) $order->get_id(),
+    'amount' => (string) $purchase['amount'], 'amount_raw' => (string) $purchase['amount'],
+    'currency' => (string) $purchase['currency'], 'transaction_status' => 'OperatorConfirmed',
+    'classification' => 'accepted', 'recorded_at' => current_time('mysql', true),
+]);
+wfpms_integration_assert($recoveryReceiptInserted === 1, 'paid recovery fixture includes actual durable accepted evidence');
+$recoveryReceiptId = (int) $wpdb->insert_id;
 $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'state' => 'paid',
+    'accepted_receipt_id' => $recoveryReceiptId,
     'execution_state' => 'pending',
     'updated_at' => current_time('mysql', true),
 ], ['id' => (int) $purchase['id']]);
@@ -338,6 +348,8 @@ wfpms_integration_assert(wp_next_scheduled('wfpms_process_execution', [(int) $pu
     'hourly recovery schedules paid purchases whose execution remained pending');
 wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
 
+$wpdb->delete(WfpMultiSeller\PurchaseRepository::receipts_table(), ['id' => $recoveryReceiptId]);
+$wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), ['accepted_receipt_id' => 0], ['id' => (int) $purchase['id']]);
 $expiredBallastIds = [];
 $expiredAt = gmdate('Y-m-d H:i:s', current_time('timestamp', true) - 3600);
 for ($index = 1; $index <= 100; $index++) {

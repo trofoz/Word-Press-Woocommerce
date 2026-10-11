@@ -69,15 +69,15 @@ final class PurchaseExecutionService
     {
         global $wpdb;
         $state = (string) ($purchase['state'] ?? '');
-        if (in_array($state, ['paid', 'free'], true)) {
+        if ($state === 'free') {
             return true;
         }
         $receiptId = (int) ($purchase['accepted_receipt_id'] ?? 0);
-        if ($state !== 'paid_review' || $receiptId < 1 || empty($purchase['id'])) {
+        if (!in_array($state, ['paid', 'paid_review'], true) || $receiptId < 1 || empty($purchase['id'])) {
             return false;
         }
         $receipt = $wpdb->get_row($wpdb->prepare(
-            'SELECT r.classification,r.transaction_status,r.attempt_id,a.status AS attempt_status '
+            'SELECT r.*,a.status AS attempt_status '
             . 'FROM ' . PurchaseRepository::receipts_table() . ' r '
             . 'LEFT JOIN ' . PurchaseRepository::attempts_table() . ' a ON a.id=r.attempt_id '
             . 'WHERE r.id=%d AND r.purchase_id=%d',
@@ -85,6 +85,7 @@ final class PurchaseExecutionService
             (int) $purchase['id']
         ), ARRAY_A);
         if (!is_array($receipt) || (string) $receipt['classification'] !== 'accepted'
+            || !PaymentOperations::receipt_covers_purchase($receipt, $purchase)
             || !in_array((string) $receipt['transaction_status'], ['Approved', 'OperatorConfirmed'], true)) {
             return false;
         }
@@ -225,11 +226,32 @@ final class PurchaseExecutionService
         global $wpdb;
         $pending = $wpdb->get_col($wpdb->prepare(
             'SELECT id FROM ' . PurchaseRepository::purchases_table()
-            . ' WHERE state IN (%s,%s) AND execution_state=%s ORDER BY updated_at ASC LIMIT 100',
-            'paid', 'free', 'pending'
+            . ' WHERE state IN (%s,%s,%s) AND execution_state=%s ORDER BY updated_at ASC,id ASC LIMIT 100',
+            'paid', 'paid_review', 'free', 'pending'
         ));
         foreach (is_array($pending) ? $pending : [] as $pendingId) {
-            self::schedule((int) $pendingId);
+            $purchase = self::purchase_by_id((int) $pendingId);
+            $orderId = (int) ($purchase['order_id'] ?? 0);
+            if ($purchase === null || !PurchaseRepository::order_lock($orderId)) {
+                continue;
+            }
+            try {
+                $purchase = PurchaseRepository::for_order($orderId);
+                if ($purchase === null || (string) $purchase['execution_state'] !== 'pending') {
+                    continue;
+                }
+                $order = wc_get_order((int) $purchase['order_id']);
+                if (!self::is_financially_accepted($purchase)) {
+                    self::mark_execution_review((int) $pendingId, 'financial_confirmation_unavailable');
+                } elseif (!$order instanceof \WC_Order || (!in_array($order->get_status(), ['pending', 'on-hold'], true)
+                    && !((string) $purchase['state'] === 'free' && $order->is_paid()))) {
+                    self::mark_execution_review((int) $pendingId, 'order_not_payable');
+                } else {
+                    self::schedule((int) $pendingId);
+                }
+            } finally {
+                PurchaseRepository::release_order_lock($orderId);
+            }
         }
         $stalled = $wpdb->get_col($wpdb->prepare(
             'SELECT id FROM ' . PurchaseRepository::purchases_table()
