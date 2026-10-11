@@ -115,6 +115,9 @@ jobs:
             python3 "$GITHUB_WORKSPACE/tests/integration-http-cart.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-cart.php" --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-migration.php" --path="$WP_PATH"
+          wp plugin deactivate wayforpay-upstream --path="$WP_PATH"
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-deactivated-callback.php" --path="$WP_PATH"
+          wp plugin activate wayforpay-upstream --path="$WP_PATH"
           callback_status="$(curl --silent --output "$RUNNER_TEMP/legacy-callback-body" --write-out '%{http_code}' \
             --request POST --header 'Content-Type: application/json' --data '{}' \
             'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"

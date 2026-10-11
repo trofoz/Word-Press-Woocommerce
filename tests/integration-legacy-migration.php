@@ -101,6 +101,8 @@ OrderPurchaseService::migrate_legacy_order((int) $legacyOrder->get_id(), $seller
 $purchase = PurchaseRepository::for_order((int) $legacyOrder->get_id());
 $mapping = LegacyMigration::for_order((int) $legacyOrder->get_id());
 update_option('wfpms_integration_legacy_order_id', (int) $legacyOrder->get_id(), false);
+update_option('wfpms_integration_legacy_seller_id', $sellerId, false);
+update_option('wfpms_integration_legacy_config_id', $configId, false);
 $snapshot = is_array($purchase) ? json_decode((string) $purchase['financial_snapshot'], true) : null;
 wfpms_legacy_assert($purchase !== null && (string) $purchase['state'] === 'awaiting_payment', 'legacy migration creates an awaiting-payment purchase');
 wfpms_legacy_assert($mapping !== null && (int) $mapping['seller_id'] === $sellerId && (int) $mapping['config_id'] === $configId,

@@ -71,7 +71,7 @@ $createAttempt = static function () use ($product, $gateway): array {
     return [$order, $purchase, $attempt];
 };
 
-$sendApproved = static function (array $attempt, string $amount, string $currency, string $authCode = 'AUTH-TEST', ?string $signingSecret = null, ?string $merchantAccount = null): array {
+$sendApproved = static function (array $attempt, string $amount, string $currency, string $authCode = 'AUTH-TEST', ?string $signingSecret = null, ?string $merchantAccount = null, string $transactionStatus = 'Approved'): array {
     $config = $signingSecret === null ? SellerRepository::config((int) $attempt['config_id']) : null;
     $callbackSecret = $signingSecret ?? ($config === null ? null : SecretStore::decrypt((string) $config['secret_ciphertext']));
     wfpms_callback_integration_assert(is_string($callbackSecret) && $callbackSecret !== '', 'Attempt retains its immutable signing credential version.');
@@ -82,7 +82,7 @@ $sendApproved = static function (array $attempt, string $amount, string $currenc
         'currency' => $currency,
         'authCode' => $authCode,
         'cardPan' => '411111******1111',
-        'transactionStatus' => 'Approved',
+        'transactionStatus' => $transactionStatus,
         'reasonCode' => '1100',
     ];
     $fields['merchantSignature'] = hash_hmac('md5', implode(';', array_values($fields)), $callbackSecret);
@@ -349,4 +349,62 @@ wfpms_callback_integration_assert($wrongCurrencyPurchase !== null
     && (string) $wrongCurrencyReceipt['currency'] === $wrongCurrency
     && $wrongCurrencyOrder instanceof WC_Order && !$wrongCurrencyOrder->is_paid(), 'Approved callback with the wrong currency is recorded for review and does not pay the order.');
 
-echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, same-attempt conflict exceptions, credential rotation, amount and currency mismatches, and one-time WooCommerce payment completion.\n";
+foreach (['Refunded', 'Voided'] as $terminalStatus) {
+    [$terminalOrder, $terminalPurchase, $terminalAttempt] = $createAttempt();
+    $sendApproved($terminalAttempt, (string) $terminalAttempt['expected_amount'], (string) $terminalAttempt['currency'],
+        'AUTH-' . strtoupper($terminalStatus), null, null, $terminalStatus);
+    $sendApproved($terminalAttempt, (string) $terminalAttempt['expected_amount'], (string) $terminalAttempt['currency'],
+        'AUTH-LATE-APPROVAL');
+    $terminalPurchase = PurchaseRepository::for_order((int) $terminalOrder->get_id());
+    $terminalOrder = wc_get_order((int) $terminalOrder->get_id());
+    wfpms_callback_integration_assert($terminalPurchase !== null
+        && (string) $terminalPurchase['state'] === 'review'
+        && (int) $terminalPurchase['accepted_receipt_id'] === 0
+        && !in_array((string) $terminalPurchase['execution_state'], ['running', 'done'], true)
+        && $terminalOrder instanceof WC_Order && !$terminalOrder->is_paid(),
+        'A signed ' . $terminalStatus . ' followed by Approved on the same unexpired attempt remains review-only.');
+}
+
+[$distinctAttemptsOrder, $distinctAttemptsPurchase, $firstDistinctAttempt] = $createAttempt();
+$wpdb->update(PurchaseRepository::attempts_table(), ['status' => 'expired'], ['id' => (int) $firstDistinctAttempt['id']]);
+$secondAttemptResult = $gateway->process_payment((int) $distinctAttemptsOrder->get_id());
+wfpms_callback_integration_assert(($secondAttemptResult['result'] ?? '') === 'success',
+    'A second card attempt can be issued for the same pending purchase after the first attempt is no longer active.');
+$secondDistinctAttempt = $wpdb->get_row($wpdb->prepare(
+    'SELECT * FROM ' . PurchaseRepository::attempts_table() . ' WHERE purchase_id=%d ORDER BY id DESC LIMIT 1',
+    (int) $distinctAttemptsPurchase['id']
+), ARRAY_A);
+wfpms_callback_integration_assert(is_array($secondDistinctAttempt)
+    && (string) $secondDistinctAttempt['external_reference'] !== (string) $firstDistinctAttempt['external_reference'],
+    'The replacement attempt has its own external reference.');
+$sendApproved($firstDistinctAttempt, (string) $firstDistinctAttempt['expected_amount'], (string) $firstDistinctAttempt['currency'], 'AUTH-FIRST');
+$sendApproved($secondDistinctAttempt, (string) $secondDistinctAttempt['expected_amount'], (string) $secondDistinctAttempt['currency'], 'AUTH-SECOND-REF');
+$distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
+$distinctAttemptReceipts = $wpdb->get_results($wpdb->prepare(
+    'SELECT id,provider_reference,classification FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d ORDER BY id ASC',
+    (int) $distinctAttemptsPurchase['id']
+), ARRAY_A);
+$distinctAttemptsExecutionArgs = [(int) $distinctAttemptsPurchase['id']];
+$executionWasScheduled = (bool) wp_next_scheduled('wfpms_process_execution', $distinctAttemptsExecutionArgs);
+if ($executionWasScheduled) {
+    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
+    // A retried/delivered-twice queue action must not complete the order twice.
+    do_action('wfpms_process_execution', (int) $distinctAttemptsPurchase['id']);
+}
+wp_clear_scheduled_hook('wfpms_process_execution', $distinctAttemptsExecutionArgs);
+$distinctAttemptsPurchase = PurchaseRepository::for_order((int) $distinctAttemptsOrder->get_id());
+wfpms_callback_integration_assert($executionWasScheduled
+    && is_array($distinctAttemptReceipts) && count($distinctAttemptReceipts) === 2
+    && (string) $distinctAttemptReceipts[0]['provider_reference'] === (string) $firstDistinctAttempt['external_reference']
+    && (string) $distinctAttemptReceipts[1]['provider_reference'] === (string) $secondDistinctAttempt['external_reference']
+    && (string) $distinctAttemptReceipts[0]['classification'] === 'accepted'
+    && (string) $distinctAttemptReceipts[1]['classification'] === 'needs_review'
+    && $distinctAttemptsPurchase !== null && (int) $distinctAttemptsPurchase['accepted_receipt_id'] === (int) $distinctAttemptReceipts[0]['id']
+    && (string) $distinctAttemptsPurchase['execution_state'] === 'done'
+    && (int) $wpdb->get_var($wpdb->prepare(
+        'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
+        (int) $distinctAttemptsPurchase['id'], 'execution_done'
+    )) === 1,
+    'Two distinct signed Approved attempts retain both receipts, accept only the first, and execute fulfillment once.');
+
+echo "PASS: signed callback retries, invalid signatures, wrong-merchant review, same-attempt conflict exceptions, credential rotation, amount and currency mismatches, terminal-status protection, distinct-attempt review, and one-time WooCommerce payment completion.\n";
