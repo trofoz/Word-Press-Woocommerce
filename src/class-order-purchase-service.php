@@ -229,6 +229,19 @@ final class OrderPurchaseService
                 $post->post_content = '[woocommerce_checkout]';
             }
         }
+        if (!headers_sent()) {
+            $wcEndpoint = function_exists('WC') && WC()->query && method_exists(WC()->query, 'get_current_endpoint')
+                ? (string) WC()->query->get_current_endpoint() : 'unavailable';
+            $diagnostic = [
+                'endpoint' => $wcEndpoint,
+                'global_order_pay' => is_object($wp) ? (int) ($wp->query_vars['order-pay'] ?? 0) : -1,
+                'query_order_pay' => (int) $wp_query->get('order-pay'),
+                'checkout_page' => function_exists('is_page') && is_page(wc_get_page_id('checkout')),
+                'is_checkout' => function_exists('is_checkout') && is_checkout(),
+                'cart_loaded' => function_exists('WC') && WC()->cart !== null,
+            ];
+            header('X-WFPMS-Order-Pay-State: ' . rawurlencode(wp_json_encode($diagnostic)));
+        }
     }
 
     public static function filter_gateway_title(string $title, string $gatewayId): string
