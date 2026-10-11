@@ -115,6 +115,10 @@ jobs:
           WFPMS_PRODUCT_SELLER_TWO="$(wp option get wfpms_integration_manual_product_id --path="$WP_PATH")" \
             python3 "$GITHUB_WORKSPACE/tests/integration-http-cart.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-cart.php" --path="$WP_PATH"
+          WFPMS_ADMIN_USER=test-admin \
+          WFPMS_ADMIN_PASSWORD=test-only-admin-password \
+          WFPMS_LEGACY_BASELINE=1 \
+            python3 "$GITHUB_WORKSPACE/tests/integration-http-legacy-operator.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-migration.php" --path="$WP_PATH"
           wp plugin deactivate wayforpay-upstream --path="$WP_PATH"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-deactivated-callback.php" --path="$WP_PATH"
