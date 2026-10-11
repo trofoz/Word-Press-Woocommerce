@@ -32,6 +32,8 @@ foreach (['classic_order_id', 'blocks_order_id'] as $key) {
     }
     // WooCommerce restricts guest order-pay pages; exercise the real form as the order owner.
     $order->set_customer_id((int) $testCustomer->ID);
+    // On-hold means the bank-transfer order is not payable. Model an unpaid retryable order instead.
+    $order->set_status('pending');
     $order->save();
     $orderPayPaths[$key] = [
         'order_id' => $orderId,
