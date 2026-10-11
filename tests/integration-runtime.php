@@ -284,6 +284,7 @@ $wpdb->update(WfpMultiSeller\PurchaseRepository::purchases_table(), [
     'execution_state' => 'none',
     'updated_at' => current_time('mysql', true),
 ], ['id' => (int) $purchase['id']]);
+$order->update_status('on-hold');
 
 $checkoutId = (int) get_option('woocommerce_checkout_page_id');
 $checkout = get_post($checkoutId);
