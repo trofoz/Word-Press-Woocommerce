@@ -2,6 +2,7 @@
 
 use WfpMultiSeller\PaymentOperations;
 use WfpMultiSeller\PurchaseRepository;
+use WfpMultiSeller\PurchaseExecutionService;
 
 global $wpdb;
 $scenario = getenv('WFPMS_BANK_RECEIPT_CASE') ?: '';
@@ -41,17 +42,42 @@ $_POST = [
 ];
 $_REQUEST = $_POST;
 
-register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, $submittedAmount, $storedOccurredAt, $orderId): void {
+$completedTransitions = 0;
+$paymentCompletions = 0;
+add_action('woocommerce_order_status_completed', static function (int $id) use ($orderId, &$completedTransitions): void {
+    if ($id === $orderId) {
+        $completedTransitions++;
+    }
+});
+add_action('woocommerce_payment_complete', static function (int $id) use ($orderId, &$paymentCompletions): void {
+    if ($id === $orderId) {
+        $paymentCompletions++;
+    }
+});
+register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, $submittedAmount, $storedOccurredAt, $orderId, &$completedTransitions, &$paymentCompletions): void {
+    // Confirmation queues execution; exercise the actual runner, including a duplicate delivery.
+    PurchaseExecutionService::run((int) $purchase['id']);
+    PurchaseExecutionService::run((int) $purchase['id']);
+    wp_clear_scheduled_hook('wfpms_process_execution', [(int) $purchase['id']]);
     $fresh = PurchaseRepository::for_order($orderId);
+    $order = wc_get_order($orderId);
+    $expectedCalls = $scenario === 'accepted' ? 1 : 0;
+    $ok = $order instanceof WC_Order && $order->get_status() === 'processing'
+        && $fresh !== null && (string) $fresh['execution_state'] === 'done'
+        && $completedTransitions === 0 && $paymentCompletions === $expectedCalls
+        && (int) $wpdb->get_var($wpdb->prepare(
+            'SELECT COUNT(*) FROM ' . PurchaseRepository::events_table() . ' WHERE purchase_id=%d AND kind=%s',
+            (int) $purchase['id'], 'execution_done'
+        )) === 1;
     if ($scenario === 'accepted') {
-        $ok = $fresh !== null && (string) $fresh['state'] === 'paid'
+        $ok = $ok && (string) $fresh['state'] === 'paid'
             && (int) $fresh['accepted_receipt_id'] > 0
             && (int) $wpdb->get_var($wpdb->prepare(
                 'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table()
                 . ' WHERE id=%d AND classification=%s', (int) $fresh['accepted_receipt_id'], 'accepted'
             )) === 1;
     } elseif ($scenario === 'duplicate') {
-        $ok = $fresh !== null && (string) $fresh['state'] === 'paid'
+        $ok = $ok && (string) $fresh['state'] === 'paid'
             && (int) $wpdb->get_var($wpdb->prepare(
                 'SELECT COUNT(*) FROM ' . PurchaseRepository::receipts_table() . ' WHERE purchase_id=%d', (int) $purchase['id']
             )) === 1;
@@ -61,7 +87,7 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
             (int) $purchase['id'], 'bank_identity_conflict'
         ), ARRAY_A);
         $evidence = is_array($event) ? json_decode((string) $event['evidence'], true) : null;
-        $ok = $fresh !== null && (string) $fresh['state'] === 'paid_review'
+        $ok = $ok && (string) $fresh['state'] === 'paid_review'
             && is_array($evidence)
             && (string) ($evidence['submitted_amount'] ?? '') === $submittedAmount
             && (string) ($evidence['normalized_amount'] ?? '') === '9999.99'
@@ -71,6 +97,9 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
     if (!$ok) {
         $diagnostic = [
             'state' => $fresh['state'] ?? null,
+            'order_status' => $order instanceof WC_Order ? $order->get_status() : 'missing',
+            'completed_transitions' => $completedTransitions,
+            'payment_completions' => $paymentCompletions,
             'expected_occurred_at' => $storedOccurredAt,
             'event_evidence' => $evidence ?? null,
         ];
@@ -78,7 +107,7 @@ register_shutdown_function(static function () use ($wpdb, $scenario, $purchase, 
             . $scenario . ' ' . wp_json_encode($diagnostic, JSON_UNESCAPED_SLASHES) . "\n");
         exit(1);
     }
-    fwrite(STDOUT, 'PASS: IBAN receipt case ' . $scenario . "\n");
+    fwrite(STDOUT, 'BASELINE: IBAN virtual non-downloadable service remains processing; completed transitions=0; case ' . $scenario . "\n");
 });
 
 PaymentOperations::confirm_bank_receipt();
