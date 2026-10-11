@@ -31,8 +31,14 @@ $before = [
     )),
 ];
 $legacyTable = WfpMultiSeller\LegacyMigration::migrations_table();
-$legacyTableExists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable;
-wfpms_schema_assert($legacyTableExists, 'v4 fixture contains the legacy migration table');
+wfpms_schema_assert($wpdb->query('DROP TABLE ' . $legacyTable) !== false, 'v3 fixture drops the v4-only legacy migration table');
+update_option('wfpms_schema_version', 3, false);
+Installer::maybe_upgrade();
+wfpms_schema_assert($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable,
+    'v3 upgrade creates the legacy migration table');
+wfpms_schema_assert((int) get_option('wfpms_schema_version') === Installer::SCHEMA_VERSION,
+    'v3 upgrade advances to the current schema version');
+
 $receiptsTable = PurchaseRepository::receipts_table();
 $legacyReceipt = [
     'purchase_id' => $purchaseId,
@@ -88,4 +94,4 @@ wfpms_schema_assert((int) get_option('wfpms_schema_version') === Installer::SCHE
     && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $legacyTable)) === $legacyTable,
     'repeated upgrade check is idempotent');
 
-echo "PASS: schema v4 to v5 provider reference upgrade and existing financial data preservation\n";
+echo "PASS: v3 legacy-table and v4 provider-reference schema upgrades preserve financial data\n";
