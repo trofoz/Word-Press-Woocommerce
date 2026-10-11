@@ -937,7 +937,11 @@ final class PaymentOperations
         }
         $fraction = $matches[2] ?? '';
         if (strlen($fraction) > $scale) {
-            return null;
+            $excess = substr($fraction, $scale);
+            if (trim($excess, '0') !== '') {
+                return null;
+            }
+            $fraction = substr($fraction, 0, $scale);
         }
         $units = ltrim($matches[1] . str_pad($fraction, $scale, '0'), '0');
         return $units === '' ? '0' : $units;

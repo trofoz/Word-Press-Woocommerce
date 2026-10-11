@@ -24,8 +24,8 @@ if ($adminId < 1 || !current_user_can('manage_woocommerce')) {
     throw new RuntimeException('The integration administrator cannot manage WooCommerce.');
 }
 
-$refundId = 'integration-refund-' . $receiptId;
-$refundAmount = $scenario === 'over_limit' ? (string) $receipt['amount'] : '5.00';
+$refundId = 'integration-refund-' . $receiptId . ($scenario === 'over_limit' ? '-over-limit' : '');
+$refundAmount = $scenario === 'over_limit' ? '6.00' : '5.00';
 $_POST = [
     '_wpnonce' => wp_create_nonce('wfpms_record_refund'),
     'receipt_id' => (string) $receiptId,

@@ -36,6 +36,11 @@ assert_same(
     'external gateway allowlist sanitation'
 );
 
+$decimalUnits = new ReflectionMethod(PaymentOperations::class, 'decimal_units');
+assert_same('1000', $decimalUnits->invoke(null, '10.000000', 2), 'stored trailing zero decimals normalize to currency scale');
+assert_same(null, $decimalUnits->invoke(null, '10.001000', 2), 'non-zero excess decimals remain invalid');
+assert_same('10', $decimalUnits->invoke(null, '10.00', 0), 'zero scale accepts only trailing zero decimals');
+
 $gateways = [
     'wfpms_card' => new stdClass(),
     'bacs' => new stdClass(),
