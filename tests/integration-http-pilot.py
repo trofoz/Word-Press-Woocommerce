@@ -32,8 +32,10 @@ def client(login=None):
             return super().redirect_request(request, response, code, message, headers, new_url)
 
     trace = RedirectTrace()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), trace)
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar), trace)
     opener._wfpms_redirect_trace = trace
+    opener._wfpms_cookie_jar = cookie_jar
     if login:
         call(opener, '/wp-login.php')
         password_env = {
@@ -111,7 +113,9 @@ def checkout(opener, product_id, method, api=False):
         result = json.loads(body)
         assert status == 200 and result.get('order_id'), f'Store API checkout failed: {body[:450]}'
         return int(result['order_id'])
-    status, _, _, _ = call(opener, '/?add-to-cart=' + str(product_id))
+    status, _, _, add_url = call(opener, '/?add-to-cart=' + str(product_id))
+    add_redirects = list(getattr(getattr(opener, '_wfpms_redirect_trace', None), 'history', []))
+    cookies = [cookie.name for cookie in getattr(opener, '_wfpms_cookie_jar', [])]
     assert status == 200
     status, _, page, final_url = call(opener, PAGE)
     found = re.search(r'name=["\']woocommerce-process-checkout-nonce["\'][^>]*value=["\']([^"\']+)', page)
@@ -119,11 +123,29 @@ def checkout(opener, product_id, method, api=False):
         title = re.search(r'<title>(.*?)</title>', page, re.S)
         errors = re.findall(r'class=["\'][^"\']*woocommerce-error[^"\']*["\'][^>]*>(.*?)</', page, re.S)
         form_classes = re.findall(r'<form\b[^>]*class=["\']([^"\']+)', page, re.I)
+        visible_text = ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', page)).split())
+        api_settings = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
+        store_cart = None
+        if api_settings:
+            wp_nonce = json.loads(api_settings.group(1))['nonce']
+            cart_status, _, cart_body, _ = call(opener, '/?rest_route=/wc/store/v1/cart',
+                headers={'X-WP-Nonce': wp_nonce})
+            if cart_status == 200:
+                cart = json.loads(cart_body)
+                store_cart = {'status': cart_status, 'items': [item.get('id') for item in cart.get('items', [])],
+                    'item_count': cart.get('items_count')}
+            else:
+                store_cart = {'status': cart_status}
         summary = {
             'http_status': status,
             'final_url': final_url,
             'redirects': getattr(getattr(opener, '_wfpms_redirect_trace', None), 'history', []),
+            'add_to_cart_final_url': add_url,
+            'add_to_cart_redirects': add_redirects,
+            'cookie_names': cookies,
+            'store_api_cart': store_cart,
             'title': title.group(1) if title else 'no-title',
+            'visible_text': visible_text[:500],
             'page_kind': {
                 'checkout_form': any('checkout' in value.lower() for value in form_classes),
                 'cart_form': any('cart' in value.lower() for value in form_classes),
@@ -135,6 +157,8 @@ def checkout(opener, product_id, method, api=False):
             'form_classes': form_classes,
             'checkout_form_count': len(re.findall(r'<form\b[^>]*class=["\'][^"\']*checkout', page, re.I)),
             'checkout_nonce_present': found is not None,
+            'guest_checkout_allowed_by_fixture': FIXTURE.get('guest_checkout_allowed'),
+            'normal_product_name_present': 'ordinary unmapped store product' in page.lower(),
             'woocommerce_error_count': len(errors),
             'woocommerce_error_text': re.sub('<[^>]+>', ' ', errors[0]).strip()[:180] if errors else '',
             'checkout_marker': 'woocommerce-checkout' in page,

@@ -204,15 +204,23 @@ if ($phase === 'http-orders') {
         $order = wc_get_order($id);
         $purchase = PurchaseRepository::for_order($id);
         $attemptCount = $purchase === null ? 0 : count(PurchaseRepository::attempts_for_purchase((int) $purchase['id']));
+        $orderTotal = $order instanceof WC_Order ? (float) $order->get_total() : 0.0;
+        $purchaseAmount = (float) ($purchase['amount'] ?? 0);
         $summary = ['order_id' => $id, 'found' => $order instanceof WC_Order,
             'method' => $order instanceof WC_Order ? $order->get_payment_method() : null,
             'status' => $order instanceof WC_Order ? $order->get_status() : null,
             'customer_matches' => $order instanceof WC_Order && (int) $order->get_customer_id() === $buyerId,
             'purchase_exists' => $purchase !== null,
-            'amount' => $purchase['amount'] ?? null, 'attempt_count' => $attemptCount];
+            'currency' => $order instanceof WC_Order ? $order->get_currency() : null,
+            'order_total' => $order instanceof WC_Order ? $order->get_total() : null,
+            'purchase_amount' => $purchase['amount'] ?? null,
+            'purchase_equals_order' => abs($purchaseAmount - $orderTotal) < 0.000001,
+            'attempt_count' => $attemptCount];
         if (!($order instanceof WC_Order && $order->get_payment_method() === 'wfpms_iban'
             && $order->get_status() === 'on-hold' && (int) $order->get_customer_id() === $buyerId
-            && $purchase !== null && (string) $purchase['amount'] === '100.00' && $attemptCount === 1)) {
+            && $order->get_currency() === 'UAH' && $purchase !== null
+            && abs($purchaseAmount - 100.0) < 0.000001 && abs($purchaseAmount - $orderTotal) < 0.000001
+            && $attemptCount === 1)) {
             throw new RuntimeException('FAIL: control HTTP checkout state: ' . wp_json_encode($summary));
         }
     }
