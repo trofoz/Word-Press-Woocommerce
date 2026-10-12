@@ -195,6 +195,7 @@ jobs:
             --request POST --header 'Content-Type: application/json' --data '{}' \
             'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"
           [[ "$callback_status" == 400 ]] || { echo "Reverse-order legacy callback ownership check returned HTTP $callback_status"; exit 1; }
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
 
   wayforpay-sandbox:
     name: WayForPay sandbox hosted-payment status
