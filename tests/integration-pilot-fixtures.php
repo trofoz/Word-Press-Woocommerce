@@ -51,6 +51,8 @@ update_option('woocommerce_wayforpay_settings', ['enabled' => 'yes', 'title' => 
 update_option('wfpms_integration_iban_product_id', $products['webinar']);
 $data = ['buyer_id' => (int) $buyerId, 'other_id' => (int) $otherId, 'admin_id' => $adminId,
     'products' => $products, 'classic_page' => (int) $classicPage, 'blocks_page' => (int) $blocksPage,
+    'checkout_page_id' => (int) wc_get_page_id('checkout'),
+    'classic_page_content' => (string) get_post((int) $classicPage)->post_content,
     'guest_checkout_allowed' => !WC()->checkout()->is_registration_required()];
 update_option('wfpms_pilot_fixture', $data, false);
 file_put_contents(getenv('WFPMS_PILOT_FIXTURE_PATH'), wp_json_encode($data));

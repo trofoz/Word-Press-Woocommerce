@@ -123,7 +123,8 @@ def checkout(opener, product_id, method, api=False):
         title = re.search(r'<title>(.*?)</title>', page, re.S)
         errors = re.findall(r'class=["\'][^"\']*woocommerce-error[^"\']*["\'][^>]*>(.*?)</', page, re.S)
         form_classes = re.findall(r'<form\b[^>]*class=["\']([^"\']+)', page, re.I)
-        visible_text = ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', page)).split())
+        without_assets = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', page, flags=re.I | re.S)
+        visible_text = ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', without_assets)).split())
         api_settings = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
         store_cart = None
         if api_settings:
@@ -158,6 +159,10 @@ def checkout(opener, product_id, method, api=False):
             'checkout_form_count': len(re.findall(r'<form\b[^>]*class=["\'][^"\']*checkout', page, re.I)),
             'checkout_nonce_present': found is not None,
             'guest_checkout_allowed_by_fixture': FIXTURE.get('guest_checkout_allowed'),
+            'configured_checkout_page_id': FIXTURE.get('checkout_page_id'),
+            'requested_classic_page_id': FIXTURE.get('classic_page'),
+            'fixture_has_classic_shortcode': '[woocommerce_checkout]' in FIXTURE.get('classic_page_content', ''),
+            'woocommerce_shortcode_wrapper_present': 'class="woocommerce"' in page,
             'normal_product_name_present': 'ordinary unmapped store product' in page.lower(),
             'woocommerce_error_count': len(errors),
             'woocommerce_error_text': re.sub('<[^>]+>', ' ', errors[0]).strip()[:180] if errors else '',
