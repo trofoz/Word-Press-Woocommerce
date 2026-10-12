@@ -95,7 +95,7 @@ def checkout(opener, product_id, method, api=False):
     assert status == 200
     status, _, page, _ = call(opener, PAGE)
     found = re.search(r'name=["\']woocommerce-process-checkout-nonce["\'][^>]*value=["\']([^"\']+)', page)
-    assert status == 200 and found, 'Classic nonce missing'
+    assert status == 200 and found, f'Classic nonce missing: product={product_id} method={method} final_url={call(opener, PAGE)[3]} html_title={re.search(r"<title>(.*?)</title>", page, re.S).group(1) if re.search(r"<title>(.*?)</title>", page, re.S) else "no-title"} has_checkout={"woocommerce-checkout" in page} has_empty_cart={"cart-empty" in page}'
     fields = {'billing_' + k: v for k, v in ADDRESS.items()}
     fields.update({'payment_method': method, 'woocommerce-process-checkout-nonce': found.group(1),
                    '_wp_http_referer': PAGE, 'terms': '1', 'terms-field': '1'})
