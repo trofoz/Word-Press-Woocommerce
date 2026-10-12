@@ -208,12 +208,15 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$(composer global config bin-dir --absolute):$PATH"
+          export WFPMS_PILOT_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export WFPMS_PILOT_BUYER_PASSWORD="$(openssl rand -hex 24)"
+          export WFPMS_PILOT_OTHER_PASSWORD="$(openssl rand -hex 24)"
           mkdir -p "$WP_PATH"
           cp -a "$RUNNER_TEMP/wfpms-wp/." "$WP_PATH/"
           wp config set table_prefix wfppilot_ --type=variable --path="$WP_PATH" >/dev/null
           wp core install --path="$WP_PATH" --url=http://127.0.0.1:8098 \
             --title='Disposable restricted store pilot' --admin_user=test-admin \
-            --admin_password=test-only-admin-password --admin_email=admin@example.test --skip-email
+            --admin_password="$WFPMS_PILOT_ADMIN_PASSWORD" --admin_email=admin@example.test --skip-email
           wp plugin activate woocommerce --path="$WP_PATH"
           wp plugin activate wayforpay-upstream wayforpay-multi-seller --path="$WP_PATH"
           ln -s "$GITHUB_WORKSPACE/store-pilot/ilovesad-wfpms-pilot" "$WP_PATH/wp-content/plugins/ilovesad-wfpms-pilot"

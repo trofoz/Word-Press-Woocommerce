@@ -41,7 +41,7 @@ $createOrder = static function (int $productId, string $method = 'wfpms_card') u
     $order = wc_create_order(['customer_id' => $buyerId]);
     $order->add_product(wc_get_product($productId), 1);
     $order->set_payment_method($method);
-    $order->set_billing_email('trofym@ukr.net');
+    $order->set_billing_email('pilot-buyer@example.test');
     $order->calculate_totals();
     $order->save();
     return $order;
@@ -104,7 +104,7 @@ if ($phase === 'configured') {
         wp_set_current_user($userId);
         $order = new WC_Order();
         $order->set_customer_id($buyerId);
-        $order->set_billing_email('trofym@ukr.net');
+        $order->set_billing_email('pilot-buyer@example.test');
         $order->add_product(wc_get_product($products['webinar']), 1);
         $order->set_payment_method('wfpms_iban');
         $blocked = false;

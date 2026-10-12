@@ -26,6 +26,7 @@ final class Pilot
         if (!class_exists(OrderPurchaseService::class) || !class_exists('WC_Payment_Gateway')) {
             return;
         }
+        // The operator binds the agreed account to this site's local user ID. Checkout email is never identity.
         // Adapt store checkout only. Callback ownership, receipts and execution hooks stay intact.
         $hooks = [
             ['woocommerce_check_cart_items', 'validate_cart', 'validate_cart', 10, 0],
@@ -264,7 +265,7 @@ final class Pilot
         if (!current_user_can('manage_woocommerce')) { wp_die('Forbidden', '', ['response' => 403]); }
         $settings = self::settings();
         echo '<div class="wrap"><h1>Контрольний пілот WayForPay</h1>';
-        echo '<p>Лише авторизований WordPress-акаунт trofym@ukr.net. Укажіть його локальний user ID і два локальні товарні ID. Порожній список або вимкнений пілот блокує нові покупки форку. Email у checkout не використовується.</p>';
+        echo '<p>Укажіть локальний user ID попередньо перевіреного акаунта пілота та два локальні товарні ID. Порожній список або вимкнений пілот блокує нові покупки форку. Email у checkout не використовується.</p>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         echo '<input type="hidden" name="action" value="ilovesad_wfpms_save_pilot">';
         wp_nonce_field('ilovesad_wfpms_save_pilot');
@@ -310,8 +311,8 @@ final class Pilot
             $ids[] = (int) $part;
         }
         $ids = array_values(array_unique($ids));
-        if (!$user || strcasecmp($user->user_email, 'trofym@ukr.net') !== 0 || !in_array(count($ids), [0, 2], true)) {
-            wp_die('Choose the local trofym@ukr.net user ID and zero or two product IDs.', '', ['response' => 400]);
+        if (!$user || !in_array(count($ids), [0, 2], true)) {
+            wp_die('Choose an existing local user ID and zero or two product IDs.', '', ['response' => 400]);
         }
         foreach ($ids as $id) {
             if (!wc_get_product($id)) { wp_die('Product missing', '', ['response' => 400]); }

@@ -17,14 +17,30 @@ PAGE = '/?page_id=' + str(FIXTURE['classic_page'])
 SETTINGS = '/wp-admin/admin.php?page=ilovesad-wfpms-pilot'
 ADDRESS = {'first_name': 'Pilot', 'last_name': 'Buyer', 'company': '', 'address_1': '1 Test Street',
            'address_2': '', 'city': 'Kyiv', 'state': 'Kyiv', 'postcode': '01001', 'country': 'UA',
-           'email': 'trofym@ukr.net', 'phone': '+380000000000'}
+           'email': 'pilot-buyer@example.test', 'phone': '+380000000000'}
 
 
 def client(login=None):
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    class RedirectTrace(urllib.request.HTTPRedirectHandler):
+        def __init__(self):
+            super().__init__()
+            self.history = []
+
+        def redirect_request(self, request, response, code, message, headers, new_url):
+            self.history.append({'status': code, 'from': request.full_url, 'to': new_url})
+            return super().redirect_request(request, response, code, message, headers, new_url)
+
+    trace = RedirectTrace()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), trace)
+    opener._wfpms_redirect_trace = trace
     if login:
         call(opener, '/wp-login.php')
-        password = 'test-only-admin-password' if login == 'test-admin' else 'pilot-test-only-password'
+        password_env = {
+            'test-admin': 'WFPMS_PILOT_ADMIN_PASSWORD',
+            'pilot-buyer': 'WFPMS_PILOT_BUYER_PASSWORD',
+            'pilot-other': 'WFPMS_PILOT_OTHER_PASSWORD',
+        }[login]
+        password = os.environ[password_env]
         status, _, body, url = call(opener, '/wp-login.php', {'log': login, 'pwd': password,
             'redirect_to': BASE + '/', 'testcookie': '1', 'wp-submit': 'Log In'})
         assert status == 200 and 'wp-login.php' not in url, 'Disposable account login failed'
@@ -42,6 +58,9 @@ def call(opener, path, data=None, headers=None, as_json=False):
     if payload is not None:
         headers['Content-Type'] = 'application/json' if as_json else 'application/x-www-form-urlencoded'
     request = urllib.request.Request(BASE + path, data=payload, headers=headers)
+    trace = getattr(opener, '_wfpms_redirect_trace', None)
+    if trace is not None:
+        trace.history = []
     try:
         response = opener.open(request, timeout=25)
     except urllib.error.HTTPError as error:
@@ -93,9 +112,33 @@ def checkout(opener, product_id, method, api=False):
         return int(result['order_id'])
     status, _, _, _ = call(opener, '/?add-to-cart=' + str(product_id))
     assert status == 200
-    status, _, page, _ = call(opener, PAGE)
+    status, _, page, final_url = call(opener, PAGE)
     found = re.search(r'name=["\']woocommerce-process-checkout-nonce["\'][^>]*value=["\']([^"\']+)', page)
-    assert status == 200 and found, f'Classic nonce missing: product={product_id} method={method} final_url={call(opener, PAGE)[3]} html_title={re.search(r"<title>(.*?)</title>", page, re.S).group(1) if re.search(r"<title>(.*?)</title>", page, re.S) else "no-title"} has_checkout={"woocommerce-checkout" in page} has_empty_cart={"cart-empty" in page}'
+    if status != 200 or not found:
+        title = re.search(r'<title>(.*?)</title>', page, re.S)
+        errors = re.findall(r'class=["\'][^"\']*woocommerce-error[^"\']*["\'][^>]*>(.*?)</', page, re.S)
+        form_classes = re.findall(r'<form\b[^>]*class=["\']([^"\']+)', page, re.I)
+        summary = {
+            'http_status': status,
+            'final_url': final_url,
+            'redirects': getattr(getattr(opener, '_wfpms_redirect_trace', None), 'history', []),
+            'title': title.group(1) if title else 'no-title',
+            'page_kind': {
+                'checkout_form': any('checkout' in value.lower() for value in form_classes),
+                'cart_form': any('cart' in value.lower() for value in form_classes),
+                'empty_cart': 'cart-empty' in page.lower() or 'cart is currently empty' in page.lower(),
+                'login_form': 'wp-login.php' in page or 'woocommerce-form-login' in page,
+                'denial_marker': status in [401, 403] or 'access denied' in page.lower() or 'forbidden' in page.lower(),
+                'pilot_error_marker': 'ilovesad_wfpms_pilot_denied' in page,
+            },
+            'form_classes': form_classes,
+            'checkout_form_count': len(re.findall(r'<form\b[^>]*class=["\'][^"\']*checkout', page, re.I)),
+            'checkout_nonce_present': found is not None,
+            'woocommerce_error_count': len(errors),
+            'woocommerce_error_text': re.sub('<[^>]+>', ' ', errors[0]).strip()[:180] if errors else '',
+            'checkout_marker': 'woocommerce-checkout' in page,
+        }
+        raise AssertionError('Classic checkout response diagnostic: ' + json.dumps(summary, ensure_ascii=False))
     fields = {'billing_' + k: v for k, v in ADDRESS.items()}
     fields.update({'payment_method': method, 'woocommerce-process-checkout-nonce': found.group(1),
                    '_wp_http_referer': PAGE, 'terms': '1', 'terms-field': '1'})

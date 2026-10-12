@@ -4,10 +4,10 @@ use WfpMultiSeller\ProductRouting;
 use WfpMultiSeller\SecretStore;
 use WfpMultiSeller\SellerRepository;
 
-$buyerId = wp_insert_user(['user_login' => 'pilot-buyer', 'user_email' => 'trofym@ukr.net',
-    'user_pass' => 'pilot-test-only-password', 'role' => 'customer']);
+$buyerId = wp_insert_user(['user_login' => 'pilot-buyer', 'user_email' => 'pilot-buyer@example.test',
+    'user_pass' => getenv('WFPMS_PILOT_BUYER_PASSWORD'), 'role' => 'customer']);
 $otherId = wp_insert_user(['user_login' => 'pilot-other', 'user_email' => 'other@example.test',
-    'user_pass' => 'pilot-test-only-password', 'role' => 'customer']);
+    'user_pass' => getenv('WFPMS_PILOT_OTHER_PASSWORD'), 'role' => 'customer']);
 if (is_wp_error($buyerId) || is_wp_error($otherId)) { throw new RuntimeException('Pilot users could not be seeded.'); }
 $admins = get_users(['role' => 'administrator', 'number' => 1, 'fields' => 'ID']);
 $adminId = (int) $admins[0];
