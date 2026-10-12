@@ -37,7 +37,7 @@ $normal->set_regular_price('100.00');
 $normal->set_virtual(true);
 $normal->save();
 $products['normal'] = (int) $normal->get_id();
-wc_create_pages();
+WC_Install::create_pages();
 $classicPage = wp_insert_post(['post_title' => 'Pilot Classic checkout', 'post_type' => 'page',
     'post_status' => 'publish', 'post_content' => '[woocommerce_checkout]']);
 $blocksPage = wp_insert_post(['post_title' => 'Pilot Blocks checkout', 'post_type' => 'page',

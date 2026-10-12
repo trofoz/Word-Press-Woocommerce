@@ -111,6 +111,14 @@ if ($phase === 'configured') {
         try { $order->save(); } catch (Throwable $error) { $blocked = true; }
         pilot_assert($blocked && $order->get_id() === 0, 'Forged email/customer ID cannot create a new fork order.');
     }
+    wp_set_current_user($buyerId);
+    $wrongMethod = new WC_Order();
+    $wrongMethod->set_customer_id($buyerId);
+    $wrongMethod->add_product(wc_get_product($products['webinar']), 1);
+    $wrongMethod->set_payment_method('wayforpay');
+    $blocked = false;
+    try { $wrongMethod->save(); } catch (Throwable $error) { $blocked = true; }
+    pilot_assert($blocked && $wrongMethod->get_id() === 0, 'New control orders cannot bypass the pilot via an original gateway.');
     echo "PASS: pilot guest/other/admin identity spoofing, changed owner/items and mixed sellers create zero purchases or attempts.\n";
 
     wp_set_current_user($buyerId);

@@ -102,16 +102,24 @@ final class Pilot
         return $order instanceof \WC_Order && PurchaseRepository::for_order($id) !== null ? $order : null;
     }
 
-    public static function assert_order(\WC_Order $order): void
+    private static function order_ids(\WC_Order $order): array
     {
         $ids = [];
+        foreach ($order->get_items('line_item') as $item) {
+            $ids[] = $item instanceof \WC_Order_Item_Product
+                ? (int) ($item->get_variation_id() ?: $item->get_product_id()) : 0;
+        }
+        return $ids;
+    }
+
+    public static function assert_order(\WC_Order $order): void
+    {
         foreach ($order->get_items('line_item') as $item) {
             if (!$item instanceof \WC_Order_Item_Product || $item->get_quantity() <= 0) {
                 throw new \RuntimeException(self::ERROR);
             }
-            $ids[] = (int) ($item->get_variation_id() ?: $item->get_product_id());
         }
-        if (!self::allowed_ids($ids) || (int) $order->get_customer_id() !== get_current_user_id()) {
+        if (!self::allowed_ids(self::order_ids($order)) || (int) $order->get_customer_id() !== get_current_user_id()) {
             throw new \RuntimeException(self::ERROR);
         }
     }
@@ -189,8 +197,14 @@ final class Pilot
 
     public static function creation_guard($order): void
     {
-        if ($order instanceof \WC_Order && in_array($order->get_payment_method(), self::METHODS, true)) {
+        if (!$order instanceof \WC_Order) { return; }
+        $method = $order->get_payment_method();
+        if (in_array($method, self::METHODS, true)) {
             self::assert_order($order);
+        } elseif (array_intersect(self::order_ids($order), self::ids()) !== []) {
+            self::assert_order($order);
+            // An empty method is a native draft; finalized control orders must use the fork.
+            if ($method !== '') { throw new \RuntimeException(self::ERROR); }
         }
     }
 
