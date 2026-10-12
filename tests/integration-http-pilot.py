@@ -28,6 +28,9 @@ def client(login=None):
         status, _, body, url = call(opener, '/wp-login.php', {'log': login, 'pwd': password,
             'redirect_to': BASE + '/', 'testcookie': '1', 'wp-submit': 'Log In'})
         assert status == 200 and 'wp-login.php' not in url, 'Disposable account login failed'
+        if login == 'test-admin':
+            # Consume WooCommerce's first-login onboarding redirect before opening native forms.
+            call(opener, '/wp-admin/')
     return opener
 
 
@@ -47,14 +50,15 @@ def call(opener, path, data=None, headers=None, as_json=False):
 
 
 def nonce(opener, page, action):
-    status, _, html, _ = call(opener, page)
+    status, _, html, final_url = call(opener, page)
     assert status == 200, f'Admin page returned HTTP {status}'
     for form in re.findall(r'<form\b.*?</form>', html, re.S):
         if re.search(r'name=["\']action["\'][^>]*value=["\']' + re.escape(action) + r'["\']', form):
             found = re.search(r'name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)', form)
             if found:
                 return found.group(1)
-    raise AssertionError('Native action form/nonce missing: ' + action)
+    actions = re.findall(r'name=["\']action["\'][^>]*value=["\']([^"\']+)', html)
+    raise AssertionError('Native action form/nonce missing: ' + action + '; final_url=' + final_url + '; actions=' + repr(actions))
 
 
 def post_action(opener, page, action, fields):
