@@ -59,5 +59,25 @@ file_put_contents(getenv('WFPMS_PILOT_FIXTURE_PATH'), wp_json_encode($data));
 // Only this disposable runtime enqueues the native REST client nonce for HTTP cookie tests.
 wp_mkdir_p(WPMU_PLUGIN_DIR);
 file_put_contents(WPMU_PLUGIN_DIR . '/pilot-runtime-nonce.php',
-    "<?php\nadd_action('wp_enqueue_scripts', static function () { wp_enqueue_script('wp-api'); });\n");
+    <<<'PHP'
+<?php
+add_action('wp_enqueue_scripts', static function () { wp_enqueue_script('wp-api'); });
+add_action('wp_footer', static function () {
+    global $wp_query;
+    $page = get_queried_object();
+    $cart = function_exists('WC') ? WC()->cart : null;
+    $state = [
+        'page_id' => get_queried_object_id(),
+        'checkout' => function_exists('is_checkout') ? is_checkout() : null,
+        'cart_object' => $cart instanceof WC_Cart,
+        'cart_count' => $cart instanceof WC_Cart ? $cart->get_cart_contents_count() : null,
+        'checkout_shortcode_registered' => shortcode_exists('woocommerce_checkout'),
+        'page_has_shortcode' => $page instanceof WP_Post && has_shortcode($page->post_content, 'woocommerce_checkout'),
+        'query_is_page' => is_object($wp_query) && $wp_query->is_page,
+        'theme' => wp_get_theme()->get_stylesheet(),
+    ];
+    echo '<!-- WFPMS-PILOT-HTTP-DIAG:' . esc_html(wp_json_encode($state)) . ' -->';
+});
+PHP
+);
 echo "PASS: isolated pilot fixtures contain two 100 UAH products, separate sellers, local users and an unmapped ordinary product.\n";

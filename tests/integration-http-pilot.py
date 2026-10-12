@@ -125,6 +125,7 @@ def checkout(opener, product_id, method, api=False):
         form_classes = re.findall(r'<form\b[^>]*class=["\']([^"\']+)', page, re.I)
         without_assets = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', page, flags=re.I | re.S)
         visible_text = ' '.join(html.unescape(re.sub(r'<[^>]+>', ' ', without_assets)).split())
+        runtime = re.search(r'WFPMS-PILOT-HTTP-DIAG:(.*?)\s+-->', page, re.S)
         api_settings = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
         store_cart = None
         if api_settings:
@@ -163,6 +164,7 @@ def checkout(opener, product_id, method, api=False):
             'requested_classic_page_id': FIXTURE.get('classic_page'),
             'fixture_has_classic_shortcode': '[woocommerce_checkout]' in FIXTURE.get('classic_page_content', ''),
             'woocommerce_shortcode_wrapper_present': 'class="woocommerce"' in page,
+            'frontend_runtime': json.loads(runtime.group(1)) if runtime else None,
             'normal_product_name_present': 'ordinary unmapped store product' in page.lower(),
             'woocommerce_error_count': len(errors),
             'woocommerce_error_text': re.sub('<[^>]+>', ' ', errors[0]).strip()[:180] if errors else '',
