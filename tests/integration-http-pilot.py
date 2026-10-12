@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the temporary pilot through native authenticated forms and checkout HTTP."""
 import datetime
+import html
 import http.cookiejar
 import json
 import os
@@ -150,6 +151,41 @@ def checkout(opener, product_id, method, api=False):
     return int(found_id.group(1) if found_id else urllib.parse.parse_qs(redirect.query)['order-received'][0])
 
 
+def assert_native_guest_login_requirement(opener, product_id, api=False):
+    if api:
+        status, _, page, _ = call(opener, PAGE)
+        found = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
+        assert status == 200 and found, 'Native WordPress REST nonce not rendered for guest test'
+        wp_nonce = json.loads(found.group(1))['nonce']
+        route = '/?rest_route=/wc/store/v1/'
+        status, headers, _, _ = call(opener, route + 'cart', headers={'X-WP-Nonce': wp_nonce})
+        assert status == 200, 'Store API guest cart load failed'
+        api_headers = {'X-WP-Nonce': wp_nonce, 'Nonce': headers.get('Nonce', '')}
+        status, headers, body, _ = call(opener, route + 'cart/add-item',
+            {'id': product_id, 'quantity': 1}, api_headers, True)
+        assert status in [200, 201], f'Store API guest add-to-cart failed: {body[:180]}'
+        api_headers['Nonce'] = headers.get('Nonce', api_headers['Nonce'])
+        status, _, body, _ = call(opener, route + 'checkout',
+            {'billing_address': ADDRESS, 'shipping_address': {k: v for k, v in ADDRESS.items() if k not in ['email', 'phone']},
+             'payment_method': 'bacs', 'payment_data': [], 'customer_note': '', 'create_account': False}, api_headers, True)
+        result = json.loads(body)
+        assert status == 403 and result.get('code') == 'woocommerce_rest_guest_checkout_disabled', \
+            f'Store API did not preserve WooCommerce guest-login policy: status={status} code={result.get("code")}'
+        assert result.get('code') != 'ilovesad_wfpms_pilot_denied', 'Pilot module blocked an ordinary guest checkout.'
+        return {'transport': 'store-api', 'status': status, 'code': result['code']}
+
+    add_status, _, _, add_url = call(opener, '/?add-to-cart=' + str(product_id))
+    assert add_status == 200
+    status, _, page, final_url = call(opener, PAGE)
+    visible = html.unescape(urllib.parse.unquote(re.sub(r'<[^>]+>', ' ', page))).lower()
+    native_message = 'you must be logged in to checkout.' in visible
+    assert status == 200 and native_message and 'ilovesad_wfpms_pilot_denied' not in page, \
+        f'Classic checkout did not preserve WooCommerce guest-login policy: status={status} final_url={final_url}'
+    assert 'woocommerce-process-checkout-nonce' not in page, 'Guest checkout form appeared despite login-required store policy.'
+    return {'transport': 'classic', 'status': status, 'add_to_cart_url': add_url,
+            'checkout_url': final_url, 'native_login_message': native_message}
+
+
 if PHASE == 'setup-empty':
     admin = client('test-admin')
     post_action(admin, '/wp-admin/admin.php?page=wfpms-legacy-migration', 'wfpms_enable_standalone_mode', {'confirm_standalone': '1'})
@@ -166,10 +202,15 @@ elif PHASE == 'configure':
     save_policy(admin, f"{FIXTURE['products']['book']},{FIXTURE['products']['webinar']}")
     print('PASS: native admin form enables the local buyer ID and exactly two local control product IDs.')
 elif PHASE == 'checkout':
-    results = {'ordinary': [], 'control': []}
+    results = {'ordinary': [], 'ordinary_guest_login': [], 'control': []}
     for login in [None, 'pilot-other', 'pilot-buyer']:
         for api in [False, True]:
-            results['ordinary'].append(checkout(client(login), FIXTURE['products']['normal'], 'bacs', api))
+            opener = client(login)
+            if login is None and not FIXTURE.get('guest_checkout_allowed', False):
+                results['ordinary_guest_login'].append(
+                    assert_native_guest_login_requirement(opener, FIXTURE['products']['normal'], api))
+            else:
+                results['ordinary'].append(checkout(opener, FIXTURE['products']['normal'], 'bacs', api))
     for api in [False, True]:
         results['control'].append(checkout(client('pilot-buyer'), FIXTURE['products']['webinar'], 'wfpms_iban', api))
     for login in [None, 'pilot-other']:

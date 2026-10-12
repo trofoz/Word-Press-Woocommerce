@@ -50,7 +50,8 @@ update_option('woocommerce_wayforpay_settings', ['enabled' => 'yes', 'title' => 
     'merchant' => 'synthetic-original', 'secretkey' => 'synthetic-original-key']);
 update_option('wfpms_integration_iban_product_id', $products['webinar']);
 $data = ['buyer_id' => (int) $buyerId, 'other_id' => (int) $otherId, 'admin_id' => $adminId,
-    'products' => $products, 'classic_page' => (int) $classicPage, 'blocks_page' => (int) $blocksPage];
+    'products' => $products, 'classic_page' => (int) $classicPage, 'blocks_page' => (int) $blocksPage,
+    'guest_checkout_allowed' => !WC()->checkout()->is_registration_required()];
 update_option('wfpms_pilot_fixture', $data, false);
 file_put_contents(getenv('WFPMS_PILOT_FIXTURE_PATH'), wp_json_encode($data));
 // Only this disposable runtime enqueues the native REST client nonce for HTTP cookie tests.

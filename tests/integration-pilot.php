@@ -180,7 +180,20 @@ if ($phase === 'configured') {
 
 if ($phase === 'http-orders') {
     $data = json_decode(file_get_contents(getenv('WFPMS_PILOT_HTTP_ORDERS_PATH')), true);
-    pilot_assert(count($data['ordinary']) === 6 && count($data['control']) === 2, 'All HTTP checkout paths ran.');
+    $guestAllowed = (bool) $fixture['guest_checkout_allowed'];
+    $expectedOrdinary = $guestAllowed ? 6 : 4;
+    pilot_assert(count($data['ordinary']) === $expectedOrdinary && count($data['control']) === 2,
+        'HTTP checkout paths match the store guest policy and both control orders completed.');
+    if (!$guestAllowed) {
+        pilot_assert(count($data['ordinary_guest_login']) === 2
+            && $data['ordinary_guest_login'][0]['transport'] === 'classic'
+            && $data['ordinary_guest_login'][0]['status'] === 200
+            && $data['ordinary_guest_login'][0]['native_login_message'] === true
+            && $data['ordinary_guest_login'][1]['transport'] === 'store-api'
+            && $data['ordinary_guest_login'][1]['status'] === 403
+            && $data['ordinary_guest_login'][1]['code'] === 'woocommerce_rest_guest_checkout_disabled',
+            'Ordinary guest checkout retains WooCommerce native login requirement.');
+    }
     foreach ($data['ordinary'] as $id) {
         $order = wc_get_order($id);
         pilot_assert($order instanceof WC_Order && $order->get_payment_method() === 'bacs'
@@ -190,11 +203,18 @@ if ($phase === 'http-orders') {
     foreach ($data['control'] as $id) {
         $order = wc_get_order($id);
         $purchase = PurchaseRepository::for_order($id);
-        pilot_assert($order instanceof WC_Order && $order->get_payment_method() === 'wfpms_iban'
+        $attemptCount = $purchase === null ? 0 : count(PurchaseRepository::attempts_for_purchase((int) $purchase['id']));
+        $summary = ['order_id' => $id, 'found' => $order instanceof WC_Order,
+            'method' => $order instanceof WC_Order ? $order->get_payment_method() : null,
+            'status' => $order instanceof WC_Order ? $order->get_status() : null,
+            'customer_matches' => $order instanceof WC_Order && (int) $order->get_customer_id() === $buyerId,
+            'purchase_exists' => $purchase !== null,
+            'amount' => $purchase['amount'] ?? null, 'attempt_count' => $attemptCount];
+        if (!($order instanceof WC_Order && $order->get_payment_method() === 'wfpms_iban'
             && $order->get_status() === 'on-hold' && (int) $order->get_customer_id() === $buyerId
-            && $purchase !== null && (string) $purchase['amount'] === '100.00'
-            && count(PurchaseRepository::attempts_for_purchase((int) $purchase['id'])) === 1,
-            'Control HTTP checkout persists exact authenticated owner and one IBAN attempt.');
+            && $purchase !== null && (string) $purchase['amount'] === '100.00' && $attemptCount === 1)) {
+            throw new RuntimeException('FAIL: control HTTP checkout state: ' . wp_json_encode($summary));
+        }
     }
     echo "PASS: six native ordinary HTTP orders have no fork snapshot; Classic/Store API control orders have exact authenticated owner and one 100 UAH IBAN attempt.\n";
     return;

@@ -61,6 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$(composer global config bin-dir --absolute):$PATH"
+          export WFPMS_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          export WFPMS_LEGACY_OPERATOR_PASSWORD="$(openssl rand -hex 24)"
           mkdir -p "$WP_PATH"
           wp core download --path="$WP_PATH" --version=7.0
           wp config create --path="$WP_PATH" \
@@ -69,7 +71,7 @@ jobs:
           wp config set DISABLE_WP_CRON true --raw --path="$WP_PATH" >/dev/null
           wp core install --path="$WP_PATH" --url=http://127.0.0.1:8099 \
             --title='Disposable WayForPay integration test' \
-            --admin_user=test-admin --admin_password=test-only-admin-password \
+            --admin_user=test-admin --admin_password="$WFPMS_ADMIN_PASSWORD" \
             --admin_email=admin@example.test --skip-email
           wp config set WFPMS_MASTER_KEY "$(php -r 'echo bin2hex(random_bytes(32));')" --type=constant --path="$WP_PATH" >/dev/null
           wp config set WFPMS_MASTER_KEY_ID "integration-test" --type=constant --path="$WP_PATH" >/dev/null
@@ -116,7 +118,8 @@ jobs:
             python3 "$GITHUB_WORKSPACE/tests/integration-http-cart.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-cart.php" --path="$WP_PATH"
           WFPMS_ADMIN_USER=test-admin \
-          WFPMS_ADMIN_PASSWORD=test-only-admin-password \
+          WFPMS_ADMIN_PASSWORD="$WFPMS_ADMIN_PASSWORD" \
+          WFPMS_LEGACY_OPERATOR_PASSWORD="$WFPMS_LEGACY_OPERATOR_PASSWORD" \
             python3 "$GITHUB_WORKSPACE/tests/integration-http-legacy-operator.py"
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-legacy-migration.php" --path="$WP_PATH"
           wp plugin deactivate wayforpay-upstream --path="$WP_PATH"
@@ -131,7 +134,7 @@ jobs:
             "$GITHUB_WORKSPACE/tests/integration-admin-fixtures.php" --path="$WP_PATH"
           WFPMS_BASE_URL=http://127.0.0.1:8099 \
           WFPMS_ADMIN_USER=test-admin \
-          WFPMS_ADMIN_PASSWORD=test-only-admin-password \
+          WFPMS_ADMIN_PASSWORD="$WFPMS_ADMIN_PASSWORD" \
           WFPMS_EXPECT_HPOS='${{ matrix.hpos }}' \
           WFPMS_SELLER_ONE_ID="$(wp option get wfpms_integration_seller_one_id --path="$WP_PATH")" \
           WFPMS_SELLER_TWO_ID="$(wp option get wfpms_integration_seller_two_id --path="$WP_PATH")" \
@@ -185,7 +188,7 @@ jobs:
           WFPMS_HTTP_ORDER_PAY_PATHS_PATH="$RUNNER_TEMP/http-order-pay-paths.json" \
           WFPMS_BASE_URL=http://127.0.0.1:8099 \
           WFPMS_ADMIN_USER=test-admin \
-          WFPMS_ADMIN_PASSWORD=test-only-admin-password \
+          WFPMS_ADMIN_PASSWORD="$WFPMS_ADMIN_PASSWORD" \
             python3 "$GITHUB_WORKSPACE/tests/integration-http-order-pay.py"
           wp plugin deactivate wayforpay-multi-seller wayforpay-upstream --path="$WP_PATH"
           wp plugin activate wayforpay-upstream --path="$WP_PATH"

@@ -180,7 +180,7 @@ assert inspect()['owner']
 restricted = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 request('/wp-login.php', opener=restricted)
 status, _, url = request('/wp-login.php', urllib.parse.urlencode({
-    'log': 'legacy-no-capability', 'pwd': 'synthetic-subscriber-password',
+    'log': 'legacy-no-capability', 'pwd': os.environ['WFPMS_LEGACY_OPERATOR_PASSWORD'],
     'redirect_to': BASE + '/wp-admin/', 'testcookie': '1',
 }).encode(), restricted)
 assert status == 200 and 'wp-login.php' not in url

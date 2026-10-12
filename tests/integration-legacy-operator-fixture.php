@@ -54,7 +54,7 @@ if ($mode === 'seed') {
         $fixture[$label] = $order->get_id();
     }
     update_option('wfpms_legacy_operator_fixture', $fixture, false);
-    wp_create_user('legacy-no-capability', 'synthetic-subscriber-password', 'legacy-subscriber@example.test');
+    wp_create_user('legacy-no-capability', getenv('WFPMS_LEGACY_OPERATOR_PASSWORD'), 'legacy-subscriber@example.test');
 } elseif ($mode === 'missing_key' || $mode === 'restore_key') {
     // Fault injection affects only the new synthetic imported configuration in this disposable DB.
     $configId = (int) get_option('wfpms_legacy_import')['config_id'];
