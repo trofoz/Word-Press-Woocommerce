@@ -72,7 +72,7 @@ if ($phase === 'empty') {
     $new->add_product(wc_get_product($products['webinar']), 1);
     $new->set_payment_method('wfpms_card');
     $blocked = false;
-    try { $new->save(); } catch (Throwable $error) { $blocked = true; }
+    try { $blocked = (int) $new->save() === 0; } catch (Throwable $error) { $blocked = true; }
     pilot_assert($blocked && $new->get_id() === 0, 'Empty allowlist blocks new fork order persistence.');
     echo "PASS: empty pilot allowlist blocks authenticated fork orders and both direct gateways.\n";
     return;
@@ -108,7 +108,7 @@ if ($phase === 'configured') {
         $order->add_product(wc_get_product($products['webinar']), 1);
         $order->set_payment_method('wfpms_iban');
         $blocked = false;
-        try { $order->save(); } catch (Throwable $error) { $blocked = true; }
+        try { $blocked = (int) $order->save() === 0; } catch (Throwable $error) { $blocked = true; }
         pilot_assert($blocked && $order->get_id() === 0, 'Forged email/customer ID cannot create a new fork order.');
     }
     wp_set_current_user($buyerId);
@@ -117,15 +117,23 @@ if ($phase === 'configured') {
     $wrongMethod->add_product(wc_get_product($products['webinar']), 1);
     $wrongMethod->set_payment_method('wayforpay');
     $blocked = false;
-    try { $wrongMethod->save(); } catch (Throwable $error) { $blocked = true; }
+    try { $blocked = (int) $wrongMethod->save() === 0; } catch (Throwable $error) { $blocked = true; }
     pilot_assert($blocked && $wrongMethod->get_id() === 0, 'New control orders cannot bypass the pilot via an original gateway.');
     echo "PASS: pilot guest/other/admin identity spoofing, changed owner/items and mixed sellers create zero purchases or attempts.\n";
 
     wp_set_current_user($buyerId);
     WC()->cart->empty_cart();
     pilot_assert((bool) WC()->cart->add_to_cart($products['webinar']), 'Authorized pilot cart accepts its webinar.');
-    pilot_assert(!WC()->cart->add_to_cart($products['normal']), 'Control plus ordinary cart is rejected.');
-    pilot_assert(!WC()->cart->add_to_cart($products['book']), 'Control A plus B is rejected by distinct-seller policy.');
+    pilot_assert(apply_filters('woocommerce_add_to_cart_validation', true, $products['normal'], 1) === false,
+        'Classic control plus ordinary add-to-cart is rejected.');
+    pilot_assert(apply_filters('woocommerce_add_to_cart_validation', true, $products['book'], 1) === false,
+        'Classic control A plus B is rejected by distinct-seller policy.');
+    foreach (['normal', 'book'] as $name) {
+        $rejected = false;
+        try { do_action('woocommerce_store_api_validate_add_to_cart', wc_get_product($products[$name]),
+            ['id' => $products[$name], 'quantity' => 1]); } catch (Throwable $error) { $rejected = true; }
+        pilot_assert($rejected, 'Store API rejects control/ordinary or cross-seller composition.');
+    }
     wc_clear_notices();
     WC()->cart->empty_cart();
     foreach ([0, $otherId, $buyerId] as $userId) {
