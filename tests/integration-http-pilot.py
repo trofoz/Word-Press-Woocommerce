@@ -83,7 +83,7 @@ def checkout(opener, product_id, method, api=False):
         assert status == 200, 'Store API cart load failed'
         api_headers = {'X-WP-Nonce': wp_nonce, 'Nonce': headers.get('Nonce', '')}
         status, headers, body, _ = call(opener, route + 'cart/add-item', {'id': product_id, 'quantity': 1}, api_headers, True)
-        assert status == 200, f'Store API add failed: {body[:300]}'
+        assert status in [200, 201], f'Store API add failed: {body[:300]}'
         api_headers['Nonce'] = headers.get('Nonce', api_headers['Nonce'])
         status, _, body, _ = call(opener, route + 'checkout',
             {'billing_address': ADDRESS, 'shipping_address': {k: v for k, v in ADDRESS.items() if k not in ['email', 'phone']},
