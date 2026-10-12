@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Exercise the temporary pilot through native authenticated forms and checkout HTTP."""
+import datetime
+import http.cookiejar
+import json
+import os
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+
+BASE = os.environ.get('WFPMS_BASE_URL', 'http://127.0.0.1:8098').rstrip('/')
+with open(os.environ['WFPMS_PILOT_FIXTURE_PATH']) as handle:
+    FIXTURE = json.load(handle)
+PHASE = os.environ['WFPMS_PILOT_HTTP_PHASE']
+PAGE = '/?page_id=' + str(FIXTURE['classic_page'])
+SETTINGS = '/wp-admin/admin.php?page=ilovesad-wfpms-pilot'
+ADDRESS = {'first_name': 'Pilot', 'last_name': 'Buyer', 'company': '', 'address_1': '1 Test Street',
+           'address_2': '', 'city': 'Kyiv', 'state': 'Kyiv', 'postcode': '01001', 'country': 'UA',
+           'email': 'trofym@ukr.net', 'phone': '+380000000000'}
+
+
+def client(login=None):
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    if login:
+        call(opener, '/wp-login.php')
+        password = 'test-only-admin-password' if login == 'test-admin' else 'pilot-test-only-password'
+        status, _, body, url = call(opener, '/wp-login.php', {'log': login, 'pwd': password,
+            'redirect_to': BASE + '/', 'testcookie': '1', 'wp-submit': 'Log In'})
+        assert status == 200 and 'wp-login.php' not in url, 'Disposable account login failed'
+    return opener
+
+
+def call(opener, path, data=None, headers=None, as_json=False):
+    payload = None
+    if data is not None:
+        payload = json.dumps(data).encode() if as_json else urllib.parse.urlencode(data).encode()
+    headers = dict(headers or {})
+    if payload is not None:
+        headers['Content-Type'] = 'application/json' if as_json else 'application/x-www-form-urlencoded'
+    request = urllib.request.Request(BASE + path, data=payload, headers=headers)
+    try:
+        response = opener.open(request, timeout=25)
+    except urllib.error.HTTPError as error:
+        response = error
+    return response.code, response.headers, response.read().decode('utf-8', 'replace'), response.geturl()
+
+
+def nonce(opener, page, action):
+    status, _, html, _ = call(opener, page)
+    assert status == 200, f'Admin page returned HTTP {status}'
+    for form in re.findall(r'<form\b.*?</form>', html, re.S):
+        if re.search(r'name=["\']action["\'][^>]*value=["\']' + re.escape(action) + r'["\']', form):
+            found = re.search(r'name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)', form)
+            if found:
+                return found.group(1)
+    raise AssertionError('Native action form/nonce missing: ' + action)
+
+
+def post_action(opener, page, action, fields):
+    fields = {**fields, 'action': action, '_wpnonce': nonce(opener, page, action)}
+    status, _, body, _ = call(opener, '/wp-admin/admin-post.php', fields)
+    assert status == 200, f'Native action {action} returned HTTP {status}: {body[:200]}'
+
+
+def save_policy(opener, ids):
+    post_action(opener, SETTINGS, 'ilovesad_wfpms_save_pilot',
+                {'buyer_id': FIXTURE['buyer_id'], 'product_ids': ids, 'enabled': '1'})
+
+
+def checkout(opener, product_id, method, api=False):
+    if api:
+        status, _, page, _ = call(opener, PAGE)
+        found = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
+        assert status == 200 and found, 'Native WordPress REST nonce not rendered in disposable test'
+        wp_nonce = json.loads(found.group(1))['nonce']
+        route = '/?rest_route=/wc/store/v1/'
+        status, headers, body, _ = call(opener, route + 'cart', headers={'X-WP-Nonce': wp_nonce})
+        assert status == 200, 'Store API cart load failed'
+        api_headers = {'X-WP-Nonce': wp_nonce, 'Nonce': headers.get('Nonce', '')}
+        status, headers, body, _ = call(opener, route + 'cart/add-item', {'id': product_id, 'quantity': 1}, api_headers, True)
+        assert status == 200, f'Store API add failed: {body[:300]}'
+        api_headers['Nonce'] = headers.get('Nonce', api_headers['Nonce'])
+        status, _, body, _ = call(opener, route + 'checkout',
+            {'billing_address': ADDRESS, 'shipping_address': {k: v for k, v in ADDRESS.items() if k not in ['email', 'phone']},
+             'payment_method': method, 'payment_data': [], 'customer_note': '', 'create_account': False}, api_headers, True)
+        result = json.loads(body)
+        assert status == 200 and result.get('order_id'), f'Store API checkout failed: {body[:450]}'
+        return int(result['order_id'])
+    status, _, _, _ = call(opener, '/?add-to-cart=' + str(product_id))
+    assert status == 200
+    status, _, page, _ = call(opener, PAGE)
+    found = re.search(r'name=["\']woocommerce-process-checkout-nonce["\'][^>]*value=["\']([^"\']+)', page)
+    assert status == 200 and found, 'Classic nonce missing'
+    fields = {'billing_' + k: v for k, v in ADDRESS.items()}
+    fields.update({'payment_method': method, 'woocommerce-process-checkout-nonce': found.group(1),
+                   '_wp_http_referer': PAGE, 'terms': '1', 'terms-field': '1'})
+    status, _, body, _ = call(opener, '/?wc-ajax=checkout', fields)
+    result = json.loads(body)
+    assert status == 200 and result.get('result') == 'success', f'Classic checkout failed: {body[:450]}'
+    redirect = urllib.parse.urlparse(result['redirect'])
+    found_id = re.search(r'/order-received/(\d+)', redirect.path)
+    return int(found_id.group(1) if found_id else urllib.parse.parse_qs(redirect.query)['order-received'][0])
+
+
+if PHASE == 'setup-empty':
+    admin = client('test-admin')
+    post_action(admin, '/wp-admin/admin.php?page=wfpms-legacy-migration', 'wfpms_enable_standalone_mode', {'confirm_standalone': '1'})
+    token = nonce(admin, SETTINGS, 'ilovesad_wfpms_save_pilot')
+    fields = {'action': 'ilovesad_wfpms_save_pilot', 'buyer_id': FIXTURE['buyer_id'], 'product_ids': '', 'enabled': '1'}
+    status, _, _, _ = call(admin, '/wp-admin/admin-post.php', {**fields, '_wpnonce': 'invalid'})
+    assert status == 403, 'Invalid nonce was accepted'
+    status, _, _, _ = call(client('pilot-other'), '/wp-admin/admin-post.php', {**fields, '_wpnonce': token})
+    assert status == 403, 'Unauthorized settings write was accepted'
+    save_policy(admin, '')
+    print('PASS: native standalone activation and empty pilot settings; invalid nonce and unauthorized admin writes rejected.')
+elif PHASE == 'configure':
+    admin = client('test-admin')
+    save_policy(admin, f"{FIXTURE['products']['book']},{FIXTURE['products']['webinar']}")
+    print('PASS: native admin form enables the local buyer ID and exactly two local control product IDs.')
+elif PHASE == 'checkout':
+    results = {'ordinary': [], 'control': []}
+    for login in [None, 'pilot-other', 'pilot-buyer']:
+        for api in [False, True]:
+            results['ordinary'].append(checkout(client(login), FIXTURE['products']['normal'], 'bacs', api))
+    for api in [False, True]:
+        results['control'].append(checkout(client('pilot-buyer'), FIXTURE['products']['webinar'], 'wfpms_iban', api))
+    for login in [None, 'pilot-other']:
+        opener = client(login)
+        status, _, page, _ = call(opener, PAGE)
+        found = re.search(r'var wpApiSettings\s*=\s*(\{[^;]+\});', page)
+        assert status == 200 and found
+        token = json.loads(found.group(1))['nonce']
+        status, _, body, _ = call(opener, '/?rest_route=/wc/store/v1/checkout',
+            {'payment_method': 'wfpms_card', 'billing_address': ADDRESS, 'customer_id': FIXTURE['buyer_id']},
+            {'X-WP-Nonce': token}, True)
+        assert status == 403 and json.loads(body)['code'] == 'ilovesad_wfpms_pilot_denied', 'Forged Store API buyer accepted'
+    with open(os.environ['WFPMS_PILOT_HTTP_ORDERS_PATH'], 'w') as handle:
+        json.dump(results, handle)
+    print('PASS: real Classic/Store API ordinary checkout for guest/other/pilot, authorized control checkout, forged Store API denial.')
+elif PHASE == 'close':
+    admin = client('test-admin')
+    post_action(admin, SETTINGS, 'ilovesad_wfpms_close_pilot', {})
+    with open(os.environ['WFPMS_PILOT_ISSUED_PATH']) as handle:
+        issued = json.load(handle)
+    for order in issued:
+        if order['method'] != 'wfpms_iban':
+            continue
+        fields = {'order_id': order['order_id'], 'operation_id': 'pilot-bank-' + str(order['order_id']),
+                  'recipient_account': 'UA213223130000026007233566001', 'amount': '100.00', 'currency': 'UAH',
+                  'occurred_at': (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)).strftime('%Y-%m-%dT%H:%M')}
+        for _ in range(2):
+            post_action(admin, '/wp-admin/admin.php?page=wfpms-payments', 'wfpms_confirm_bank_receipt', fields)
+    print('PASS: native pilot close preserves original callbacks; native IBAN confirmation and duplicate remain available after close.')
+else:
+    raise AssertionError('Unknown HTTP pilot phase')

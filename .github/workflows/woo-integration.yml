@@ -195,7 +195,50 @@ jobs:
             --request POST --header 'Content-Type: application/json' --data '{}' \
             'http://127.0.0.1:8099/?wc-api=WC_wayforpay')"
           [[ "$callback_status" == 400 ]] || { echo "Reverse-order legacy callback ownership check returned HTTP $callback_status"; exit 1; }
+
+      - name: Verify restricted store pilot in a separate disposable WordPress prefix
+        env:
+          WP_PATH: ${{ runner.temp }}/wfpms-pilot-wp
+          WP_CLI_ALLOW_ROOT: '1'
+          WFPMS_BASE_URL: http://127.0.0.1:8098
+          WFPMS_PILOT_FIXTURE_PATH: ${{ runner.temp }}/pilot-fixtures.json
+          WFPMS_PILOT_ISSUED_PATH: ${{ runner.temp }}/pilot-issued.json
+          WFPMS_PILOT_HTTP_ORDERS_PATH: ${{ runner.temp }}/pilot-http-orders.json
+          WFPMS_CHECKOUT: ${{ matrix.checkout }}
+        run: |
+          set -euo pipefail
+          export PATH="$(composer global config bin-dir --absolute):$PATH"
+          mkdir -p "$WP_PATH"
+          cp -a "$RUNNER_TEMP/wfpms-wp/." "$WP_PATH/"
+          wp config set table_prefix wfppilot_ --type=variable --path="$WP_PATH" >/dev/null
+          wp core install --path="$WP_PATH" --url=http://127.0.0.1:8098 \
+            --title='Disposable restricted store pilot' --admin_user=test-admin \
+            --admin_password=test-only-admin-password --admin_email=admin@example.test --skip-email
+          wp plugin activate woocommerce --path="$WP_PATH"
+          wp plugin activate wayforpay-upstream wayforpay-multi-seller --path="$WP_PATH"
+          ln -s "$GITHUB_WORKSPACE/store-pilot/ilovesad-wfpms-pilot" "$WP_PATH/wp-content/plugins/ilovesad-wfpms-pilot"
+          wp plugin activate ilovesad-wfpms-pilot --path="$WP_PATH"
+          if [[ '${{ matrix.hpos }}' == 1 ]]; then
+            wp option update woocommerce_custom_orders_table_enabled yes --path="$WP_PATH"
+          fi
+          wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot-fixtures.php" --path="$WP_PATH"
+          php -S 127.0.0.1:8098 -t "$WP_PATH" >"$RUNNER_TEMP/pilot-server.log" 2>&1 &
+          pilot_server_pid=$!
+          trap 'kill "$pilot_server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8098/ >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8098/ >/dev/null || { cat "$RUNNER_TEMP/pilot-server.log"; exit 1; }
+          WFPMS_PILOT_HTTP_PHASE=setup-empty python3 tests/integration-http-pilot.py
           wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
+          WFPMS_PILOT_PHASE=empty wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
+          WFPMS_PILOT_HTTP_PHASE=configure python3 tests/integration-http-pilot.py
+          WFPMS_PILOT_PHASE=configured wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
+          WFPMS_PILOT_HTTP_PHASE=checkout python3 tests/integration-http-pilot.py
+          WFPMS_PILOT_PHASE=http-orders wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
+          WFPMS_PILOT_HTTP_PHASE=close python3 tests/integration-http-pilot.py
+          WFPMS_PILOT_PHASE=closed wp eval-file "$GITHUB_WORKSPACE/tests/integration-pilot.php" --path="$WP_PATH"
 
   wayforpay-sandbox:
     name: WayForPay sandbox hosted-payment status
