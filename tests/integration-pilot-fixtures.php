@@ -38,6 +38,8 @@ $normal->set_virtual(true);
 $normal->save();
 $products['normal'] = (int) $normal->get_id();
 WC_Install::create_pages();
+// This isolated checkout runtime represents an open store, not a fresh WooCommerce Coming Soon install.
+update_option('woocommerce_coming_soon', 'no');
 $classicPage = wp_insert_post(['post_title' => 'Pilot Classic checkout', 'post_type' => 'page',
     'post_status' => 'publish', 'post_content' => '[woocommerce_checkout]']);
 $blocksPage = wp_insert_post(['post_title' => 'Pilot Blocks checkout', 'post_type' => 'page',
